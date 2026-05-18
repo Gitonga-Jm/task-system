@@ -1,5 +1,5 @@
-cd ~/task-queue-system
-cat > main.py << 'EOF'
+
+
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
