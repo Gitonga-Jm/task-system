@@ -1,4 +1,7 @@
-
+import sys
+import traceback
+print(f"Python version: {sys.version}")
+print("Starting main.py import...")
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
@@ -331,6 +334,12 @@ def root():
 
 PORT = int(os.getenv('PORT', 8000))
 if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=PORT)
-EOF
+    try:
+        import uvicorn
+        PORT = int(os.getenv('PORT', 8000))
+        print(f"Starting server on port {PORT}...")
+        uvicorn.run(app, host="0.0.0.0", port=PORT)
+    except Exception as e:
+        print(f"CRITICAL ERROR: {e}")
+        traceback.print_exc()
+        sys.exit(1)
