@@ -1,0 +1,535 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Task Queue System | Production Dashboard</title>
+    <!-- Chart.js for graphs -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            background: #0f0f1a;
+            color: #e0e0e0;
+            transition: background 0.3s, color 0.3s;
+        }
+        
+        body.light-mode {
+            background: #f5f5f7;
+            color: #1a1a2e;
+        }
+        
+        .container { max-width: 1400px; margin: 0 auto; padding: 20px; }
+        
+        /* Header */
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 30px;
+            flex-wrap: wrap;
+            gap: 15px;
+        }
+        
+        h1 {
+            font-size: 28px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            -webkit-background-clip: text;
+            background-clip: text;
+            color: transparent;
+        }
+        
+        .theme-toggle {
+            background: #2a2a3e;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 25px;
+            cursor: pointer;
+            color: #e0e0e0;
+            font-size: 14px;
+        }
+        
+        body.light-mode .theme-toggle {
+            background: #e0e0e0;
+            color: #1a1a2e;
+        }
+        
+        /* Stats Grid */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+        
+        .stat-card {
+            background: #1a1a2e;
+            border-radius: 15px;
+            padding: 20px;
+            text-align: center;
+            transition: transform 0.2s;
+            border: 1px solid #2a2a3e;
+        }
+        
+        body.light-mode .stat-card {
+            background: white;
+            border: 1px solid #e0e0e0;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.05);
+        }
+        
+        .stat-card:hover { transform: translateY(-5px); }
+        
+        .stat-number {
+            font-size: 42px;
+            font-weight: bold;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            -webkit-background-clip: text;
+            background-clip: text;
+            color: transparent;
+        }
+        
+        .stat-label {
+            font-size: 12px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: #888;
+            margin-top: 10px;
+        }
+        
+        /* Cards */
+        .card {
+            background: #1a1a2e;
+            border-radius: 15px;
+            padding: 25px;
+            margin-bottom: 25px;
+            border: 1px solid #2a2a3e;
+        }
+        
+        body.light-mode .card {
+            background: white;
+            border: 1px solid #e0e0e0;
+        }
+        
+        .card h2 {
+            margin-bottom: 20px;
+            font-size: 20px;
+            border-left: 4px solid #667eea;
+            padding-left: 15px;
+        }
+        
+        .card h3 {
+            color: #667eea;
+            margin: 15px 0 10px 0;
+            font-size: 14px;
+        }
+        
+        /* Forms */
+        select, input, textarea {
+            width: 100%;
+            padding: 12px;
+            margin: 8px 0;
+            background: #0f0f1a;
+            border: 1px solid #2a2a3e;
+            border-radius: 8px;
+            color: #e0e0e0;
+            font-size: 14px;
+        }
+        
+        body.light-mode select,
+        body.light-mode input,
+        body.light-mode textarea {
+            background: #f5f5f7;
+            border: 1px solid #ddd;
+            color: #1a1a2e;
+        }
+        
+        button {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 500;
+            margin-right: 10px;
+            margin-top: 10px;
+            transition: opacity 0.2s;
+        }
+        
+        button:hover { opacity: 0.8; }
+        
+        .btn-danger {
+            background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+        }
+        
+        .btn-success {
+            background: linear-gradient(135deg, #43e97b 0%, #38f9d7 100%);
+        }
+        
+        /* Task Items */
+        .task-item {
+            background: #0f0f1a;
+            border-radius: 10px;
+            padding: 15px;
+            margin-bottom: 12px;
+            border-left: 4px solid #667eea;
+        }
+        
+        body.light-mode .task-item {
+            background: #f9f9f9;
+        }
+        
+        .task-id {
+            font-family: monospace;
+            font-size: 11px;
+            color: #888;
+        }
+        
+        .badge {
+            display: inline-block;
+            padding: 4px 10px;
+            border-radius: 20px;
+            font-size: 11px;
+            font-weight: bold;
+            margin-left: 10px;
+        }
+        
+        .badge-failed { background: #dc3545; color: white; }
+        .badge-success { background: #28a745; color: white; }
+        .badge-pending { background: #ffc107; color: #000; }
+        
+        /* Grid layouts */
+        .two-columns {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+            gap: 20px;
+        }
+        
+        /* Toast notification */
+        .toast {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            background: #28a745;
+            color: white;
+            padding: 12px 24px;
+            border-radius: 8px;
+            animation: slideIn 0.3s ease;
+            z-index: 1000;
+        }
+        
+        .toast.error { background: #dc3545; }
+        
+        @keyframes slideIn {
+            from { transform: translateX(100%); opacity: 0; }
+            to { transform: translateX(0); opacity: 1; }
+        }
+        
+        /* History table */
+        .history-table {
+            width: 100%;
+            font-size: 12px;
+            border-collapse: collapse;
+        }
+        
+        .history-table th,
+        .history-table td {
+            padding: 10px;
+            text-align: left;
+            border-bottom: 1px solid #2a2a3e;
+        }
+        
+        body.light-mode .history-table td {
+            border-bottom-color: #e0e0e0;
+        }
+        
+        /* Responsive */
+        @media (max-width: 768px) {
+            .two-columns { grid-template-columns: 1fr; }
+            .stats-grid { grid-template-columns: repeat(2, 1fr); }
+        }
+    </style>
+</head>
+<body>
+<div class="container">
+    <div class="header">
+        <h1>🚀 Distributed Task Queue System</h1>
+        <button class="theme-toggle" onclick="toggleTheme()">🌓 Dark/Light</button>
+    </div>
+
+    <div class="stats-grid" id="stats">
+        <div class="stat-card"><div class="stat-number" id="queueSize">-</div><div class="stat-label">Queue Size</div></div>
+        <div class="stat-card"><div class="stat-number" id="deadLetterSize">-</div><div class="stat-label">Dead Letter Queue</div></div>
+        <div class="stat-card"><div class="stat-number" id="tasksCreated">-</div><div class="stat-label">Tasks Created</div></div>
+        <div class="stat-card"><div class="stat-number" id="tasksFailed">-</div><div class="stat-label">Tasks Failed</div></div>
+    </div>
+
+    <div class="two-columns">
+        <!-- Task Submission -->
+        <div class="card">
+            <h2>📝 Submit Task</h2>
+            <select id="taskType">
+                <option value="email">📧 Email Task</option>
+                <option value="resize_image">🖼️ Resize Image</option>
+                <option value="fail_me">💀 Test Failure (Retry Demo)</option>
+            </select>
+
+            <div id="emailFields">
+                <h3>Email Details</h3>
+                <input type="email" id="emailTo" placeholder="recipient@example.com">
+                <input type="text" id="emailSubject" placeholder="Subject">
+                <textarea id="emailBody" rows="3" placeholder="Email content..."></textarea>
+            </div>
+
+            <div id="imageFields" style="display:none;">
+                <h3>Image Details</h3>
+                <input type="text" id="imagePath" placeholder="Input path: /app/images/input/test_image.png">
+                <input type="text" id="outputPath" placeholder="Output path: /app/images/output/resized.png">
+                <input type="number" id="imgWidth" placeholder="Width (default: 800)">
+                <input type="number" id="imgHeight" placeholder="Height (default: 600)">
+            </div>
+
+            <div id="failFields" style="display:none;">
+                <h3>⚠️ Failure Test</h3>
+                <p style="color: #888; font-size: 12px;">This task will fail 3 times then go to Dead Letter Queue. Demonstrates retry logic.</p>
+            </div>
+
+            <button onclick="submitTask()">🚀 Submit Task</button>
+            <button onclick="clearForm()" class="btn-danger">🗑️ Clear Form</button>
+        </div>
+
+        <!-- Charts -->
+        <div class="card">
+            <h2>📊 Task Metrics</h2>
+            <canvas id="taskChart" height="200"></canvas>
+        </div>
+    </div>
+
+    <!-- Dead Letter Queue -->
+    <div class="card">
+        <h2>💀 Dead Letter Queue</h2>
+        <div style="display: flex; gap: 10px; margin-bottom: 20px;">
+            <button onclick="loadDeadLetters()">🔄 Refresh</button>
+            <button onclick="clearDeadLetters()" class="btn-danger">🗑️ Clear All</button>
+        </div>
+        <div id="deadLetters"></div>
+    </div>
+
+    <!-- Task History -->
+    <div class="card">
+        <h2>📜 Recent Tasks (Last 10)</h2>
+        <div id="taskHistory">Loading...</div>
+    </div>
+</div>
+
+<script>
+    let taskHistory = [];
+    let chart;
+    
+    // Theme toggle
+    function toggleTheme() {
+        document.body.classList.toggle('light-mode');
+        localStorage.setItem('theme', document.body.classList.contains('light-mode') ? 'light' : 'dark');
+    }
+    
+    // Load saved theme
+    if (localStorage.getItem('theme') === 'light') {
+        document.body.classList.add('light-mode');
+    }
+    
+    // Show toast notification
+    function showToast(message, isError = false) {
+        const toast = document.createElement('div');
+        toast.className = 'toast' + (isError ? ' error' : '');
+        toast.textContent = message;
+        document.body.appendChild(toast);
+        setTimeout(() => toast.remove(), 3000);
+    }
+    
+    // Toggle form fields based on task type
+    document.getElementById('taskType').addEventListener('change', function() {
+        const type = this.value;
+        document.getElementById('emailFields').style.display = type === 'email' ? 'block' : 'none';
+        document.getElementById('imageFields').style.display = type === 'resize_image' ? 'block' : 'none';
+        document.getElementById('failFields').style.display = type === 'fail_me' ? 'block' : 'none';
+    });
+    
+    // Load stats
+    function loadStats() {
+        fetch('/stats')
+            .then(res => res.json())
+            .then(data => {
+                document.getElementById('queueSize').innerText = data.queue_size;
+                document.getElementById('deadLetterSize').innerText = data.dead_letter_size;
+                document.getElementById('tasksCreated').innerText = data.total_tasks_created;
+                document.getElementById('tasksFailed').innerText = data.total_tasks_failed;
+                
+                // Update chart
+                if (chart) {
+                    chart.data.datasets[0].data = [data.total_tasks_created - data.total_tasks_failed, data.total_tasks_failed];
+                    chart.update();
+                }
+            })
+            .catch(err => console.error('Stats error:', err));
+    }
+    
+    // Initialize chart
+    function initChart() {
+        const ctx = document.getElementById('taskChart').getContext('2d');
+        chart = new Chart(ctx, {
+            type: 'doughnut',
+            data: {
+                labels: ['Successful', 'Failed'],
+                datasets: [{
+                    data: [0, 0],
+                    backgroundColor: ['#28a745', '#dc3545'],
+                    borderWidth: 0
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: true,
+                plugins: { legend: { position: 'bottom' } }
+            }
+        });
+    }
+    
+    // Load dead letters
+    function loadDeadLetters() {
+        fetch('/dead-letter')
+            .then(res => res.json())
+            .then(data => {
+                const container = document.getElementById('deadLetters');
+                if (data.tasks.length === 0) {
+                    container.innerHTML = '<p style="color: #888;">✅ No failed tasks</p>';
+                    return;
+                }
+                container.innerHTML = data.tasks.map(task => `
+                    <div class="task-item">
+                        <strong>${task.type}</strong>
+                        <span class="badge badge-failed">FAILED</span>
+                        <div class="task-id">ID: ${task.task_id}</div>
+                        <div>❌ Error: ${task.last_error}</div>
+                        <div>📅 Failed: ${new Date(task.failed_at * 1000).toLocaleString()}</div>
+                        <button onclick="retryTask('${task.task_id}')">🔄 Retry</button>
+                        <button onclick="deleteTask('${task.task_id}')" class="btn-danger">🗑️ Delete</button>
+                    </div>
+                `).join('');
+            })
+            .catch(err => console.error('Dead letter error:', err));
+    }
+    
+    // Load task history
+    function loadTaskHistory() {
+        fetch('/stats')
+            .then(res => res.json())
+            .then(() => {
+                const historyHtml = taskHistory.slice(-10).reverse().map(t => `
+                    <tr>
+                        <td>${t.id.substring(0, 8)}...</td>
+                        <td>${t.type}</td>
+                        <td><span class="badge ${t.status === 'completed' ? 'badge-success' : 'badge-failed'}">${t.status}</span></td>
+                        <td>${new Date(t.time).toLocaleTimeString()}</td>
+                    </tr>
+                `).join('');
+                document.getElementById('taskHistory').innerHTML = taskHistory.length ? 
+                    `<table class="history-table"><tr><th>Task ID</th><th>Type</th><th>Status</th><th>Time</th></tr>${historyHtml}</table>` : 
+                    '<p style="color: #888;">No recent tasks</p>';
+            });
+    }
+    
+    // Submit task
+    function submitTask() {
+        const type = document.getElementById('taskType').value;
+        let payload = {};
+        
+        if (type === 'email') {
+            payload = {
+                to: document.getElementById('emailTo').value,
+                subject: document.getElementById('emailSubject').value,
+                body: document.getElementById('emailBody').value
+            };
+        } else if (type === 'resize_image') {
+            payload = {
+                input_path: document.getElementById('imagePath').value || '/app/images/input/test_image.png',
+                output_path: document.getElementById('outputPath').value || '/app/images/output/resized.png',
+                width: parseInt(document.getElementById('imgWidth').value) || 800,
+                height: parseInt(document.getElementById('imgHeight').value) || 600
+            };
+        }
+        
+        fetch('/tasks', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ type, payload, max_retries: 3 })
+        })
+        .then(res => res.json())
+        .then(data => {
+            showToast(`✅ Task submitted: ${data.task_id}`);
+            taskHistory.unshift({ id: data.task_id, type, status: 'pending', time: new Date() });
+            loadStats();
+            loadTaskHistory();
+            clearForm();
+        })
+        .catch(err => showToast(`❌ Error: ${err.message}`, true));
+    }
+    
+    // Retry task
+    function retryTask(taskId) {
+        fetch(`/dead-letter/retry/${taskId}`, { method: 'POST' })
+            .then(() => {
+                showToast(`🔄 Task ${taskId.substring(0, 8)}... requeued`);
+                loadDeadLetters();
+                loadStats();
+            });
+    }
+    
+    // Delete task
+    function deleteTask(taskId) {
+        if (confirm('Delete this failed task?')) {
+            fetch(`/dead-letter/${taskId}`, { method: 'DELETE' })
+                .then(() => {
+                    showToast(`🗑️ Task deleted`);
+                    loadDeadLetters();
+                    loadStats();
+                });
+        }
+    }
+    
+    // Clear all dead letters
+    function clearDeadLetters() {
+        if (confirm('⚠️ Delete ALL failed tasks? This cannot be undone.')) {
+            fetch('/dead-letter/clear', { method: 'DELETE' })
+                .then(() => {
+                    showToast(`🗑️ All dead letters cleared`);
+                    loadDeadLetters();
+                    loadStats();
+                });
+        }
+    }
+    
+    // Clear form
+    function clearForm() {
+        document.getElementById('emailTo').value = '';
+        document.getElementById('emailSubject').value = '';
+        document.getElementById('emailBody').value = '';
+        document.getElementById('imagePath').value = '';
+        document.getElementById('outputPath').value = '';
+        document.getElementById('imgWidth').value = '';
+        document.getElementById('imgHeight').value = '';
+    }
+    
+    // Initial load
+    initChart();
+    loadStats();
+    loadDeadLetters();
+    
+    // Auto-refresh
+    setInterval(loadStats, 3000);
+    setInterval(loadDeadLetters, 5000);
+</script>
+</body>
+</html>

@@ -1,0 +1,57 @@
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
+
+  api:
+    build: .
+    ports:
+      - "8000:8000"
+    depends_on:
+      - redis
+    environment:
+      - REDIS_HOST=redis
+    volumes:
+      - ./images:/app/images
+      - ./static:/app/static
+    restart: unless-stopped
+
+  worker1:
+    build: .
+    depends_on:
+      - redis
+    environment:
+      - REDIS_HOST=redis
+    volumes:
+      - ./images:/app/images
+    restart: unless-stopped
+    command: python worker.py
+
+  worker2:
+    build: .
+    depends_on:
+      - redis
+    environment:
+      - REDIS_HOST=redis
+    volumes:
+      - ./images:/app/images
+    restart: unless-stopped
+    command: python worker.py
+
+  worker3:
+    build: .
+    depends_on:
+      - redis
+    environment:
+      - REDIS_HOST=redis
+    volumes:
+      - ./images:/app/images
+    restart: unless-stopped
+    command: python worker.py
+
+volumes:
+  redis_data:
