@@ -1,4 +1,6 @@
-from fastapi import FastAPI, HTTPException
+cd ~/task-queue-system
+cat > main.py << 'EOF'
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -6,6 +8,7 @@ import redis
 import uuid
 import json
 import os
+import asyncio
 from models import Task, TaskStatus
 from datetime import datetime
 from prometheus_client import Counter, generate_latest, CONTENT_TYPE_LATEST
@@ -13,11 +16,15 @@ from fastapi.responses import Response
 
 app = FastAPI(title="Task Queue System")
 
-# Redis connection
-import os
+# Redis connection with Render.com support
 REDIS_HOST = os.getenv('REDIS_HOST', 'localhost')
 REDIS_PORT = int(os.getenv('REDIS_PORT', 6379))
-redis_client = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, db=0, decode_responses=True)
+REDIS_PASSWORD = os.getenv('REDIS_PASSWORD', None)
+
+if REDIS_PASSWORD:
+    redis_client = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, password=REDIS_PASSWORD, decode_responses=True)
+else:
+    redis_client = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, db=0, decode_responses=True)
 
 # Queue names
 QUEUE_NAME = "task_queue"
@@ -27,6 +34,65 @@ DEAD_LETTER_QUEUE = "dead_letter_queue"
 tasks_created = Counter('tasks_created_total', 'Total tasks created')
 tasks_processed = Counter('tasks_processed_total', 'Total tasks processed')
 tasks_failed = Counter('tasks_failed_total', 'Total tasks failed')
+
+# WebSocket Connection Manager
+class ConnectionManager:
+    def __init__(self):
+        self.active_connections: list[WebSocket] = []
+        self.task_updates = asyncio.Queue()
+
+    async def connect(self, websocket: WebSocket):
+        await websocket.accept()
+        self.active_connections.append(websocket)
+        print(f"[WebSocket] Client connected. Total: {len(self.active_connections)}")
+
+    def disconnect(self, websocket: WebSocket):
+        if websocket in self.active_connections:
+            self.active_connections.remove(websocket)
+        print(f"[WebSocket] Client disconnected. Total: {len(self.active_connections)}")
+
+    async def broadcast_task_update(self, task_id: str, status: str, message: str = ""):
+        update = {
+            "type": "task_update",
+            "task_id": task_id,
+            "status": status,
+            "message": message,
+            "timestamp": datetime.now().isoformat()
+        }
+        await self.task_updates.put(update)
+
+    async def broadcast_stats_update(self, stats: dict):
+        update = {
+            "type": "stats_update",
+            "stats": stats,
+            "timestamp": datetime.now().isoformat()
+        }
+        await self.task_updates.put(update)
+
+    async def broadcast_dead_letter_update(self, dead_letters: list):
+        update = {
+            "type": "dead_letter_update",
+            "dead_letters": dead_letters,
+            "timestamp": datetime.now().isoformat()
+        }
+        await self.task_updates.put(update)
+
+    async def process_updates(self):
+        while True:
+            update = await self.task_updates.get()
+            for connection in self.active_connections[:]:
+                try:
+                    await connection.send_json(update)
+                except:
+                    if connection in self.active_connections:
+                        self.active_connections.remove(connection)
+
+manager = ConnectionManager()
+
+# Start background task to process WebSocket updates
+@app.on_event("startup")
+async def startup_event():
+    asyncio.create_task(manager.process_updates())
 
 # Serve static files (dashboard)
 static_dir = os.path.join(os.path.dirname(__file__), "static")
@@ -38,13 +104,17 @@ class TaskCreate(BaseModel):
     payload: dict
     max_retries: int = 3
 
+class Notification(BaseModel):
+    type: str
+    data: dict
+
 @app.get("/dashboard", response_class=HTMLResponse)
 def dashboard():
     dashboard_path = os.path.join(static_dir, "dashboard.html")
     if os.path.exists(dashboard_path):
         with open(dashboard_path, "r") as f:
             return HTMLResponse(content=f.read())
-    return HTMLResponse(content="<h1>Dashboard not found. Run: mkdir static && create dashboard.html</h1>")
+    return HTMLResponse(content="<h1>Dashboard not found</h1>")
 
 @app.post("/tasks", status_code=202)
 def create_task(task_req: TaskCreate):
@@ -52,7 +122,6 @@ def create_task(task_req: TaskCreate):
     
     print(f"[API] Received task type: {task_req.type}")
     print(f"[API] Received payload: {task_req.payload}")
-    print(f"[API] Max retries: {task_req.max_retries}")
     
     task = Task(
         id=task_id,
@@ -64,9 +133,7 @@ def create_task(task_req: TaskCreate):
         created_at=datetime.utcnow()
     )
     
-    print(f"[API] Task created with payload: {task.payload}")
-    
-    # Store task metadata in Redis hash
+    # Store task metadata
     redis_client.hset(f"task:{task_id}", "id", task_id)
     redis_client.hset(f"task:{task_id}", "type", task.type)
     redis_client.hset(f"task:{task_id}", "status", task.status.value)
@@ -74,20 +141,18 @@ def create_task(task_req: TaskCreate):
     redis_client.hset(f"task:{task_id}", "created_at", task.created_at.isoformat())
     redis_client.hset(f"task:{task_id}", "max_retries", task.max_retries)
     
-    # Convert task to JSON and push to queue
+    # Push to queue
     task_json = task.to_json()
-    print(f"[API] JSON being queued: {task_json}")
-    
     redis_client.rpush(QUEUE_NAME, task_json)
     tasks_created.inc()
     
-    queue_position = redis_client.llen(QUEUE_NAME)
-    print(f"[API] Task {task_id} queued at position {queue_position}")
+    # Broadcast WebSocket update
+    asyncio.create_task(manager.broadcast_task_update(task_id, "queued", "Task submitted"))
     
     return {
         "task_id": task_id,
         "status": "accepted",
-        "queue_position": queue_position
+        "queue_position": redis_client.llen(QUEUE_NAME)
     }
 
 @app.get("/tasks/{task_id}")
@@ -148,10 +213,11 @@ def retry_dead_letter(task_id: str):
                 redis_client.hset(f"task:{task_id}", "last_error", "")
                 
                 tasks_created.inc()
+                asyncio.create_task(manager.broadcast_task_update(task_id, "retried", "Retried from dead letter"))
                 
                 return {"message": f"Task {task_id} re-queued successfully"}
     
-    raise HTTPException(status_code=404, detail="Task not found in dead letter queue")
+    raise HTTPException(status_code=404, detail="Task not found")
 
 @app.delete("/dead-letter/{task_id}")
 def delete_dead_letter(task_id: str):
@@ -163,15 +229,15 @@ def delete_dead_letter(task_id: str):
             dead_letter = json.loads(item)
             if dead_letter.get("task_id") == task_id:
                 redis_client.lrem(DEAD_LETTER_QUEUE, 1, item)
-                return {"message": f"Task {task_id} deleted from dead letter queue"}
+                return {"message": f"Task {task_id} deleted"}
     
-    raise HTTPException(status_code=404, detail="Task not found in dead letter queue")
+    raise HTTPException(status_code=404, detail="Task not found")
 
 @app.delete("/dead-letter/clear")
 def clear_dead_letter_queue():
     queue_length = redis_client.llen(DEAD_LETTER_QUEUE)
     redis_client.delete(DEAD_LETTER_QUEUE)
-    return {"message": f"Cleared {queue_length} tasks from dead letter queue"}
+    return {"message": f"Cleared {queue_length} tasks"}
 
 @app.get("/metrics")
 def get_metrics():
@@ -183,34 +249,88 @@ def queue_length():
 
 @app.get("/stats")
 def get_stats():
-    return {
+    stats_data = {
         "queue_size": redis_client.llen(QUEUE_NAME),
         "dead_letter_size": redis_client.llen(DEAD_LETTER_QUEUE),
         "total_tasks_created": tasks_created._value.get(),
         "total_tasks_processed": tasks_processed._value.get(),
         "total_tasks_failed": tasks_failed._value.get()
     }
+    asyncio.create_task(manager.broadcast_stats_update(stats_data))
+    return stats_data
+
+@app.websocket("/ws")
+async def websocket_endpoint(websocket: WebSocket):
+    await manager.connect(websocket)
+    try:
+        # Send initial data
+        stats = {
+            "queue_size": redis_client.llen(QUEUE_NAME),
+            "dead_letter_size": redis_client.llen(DEAD_LETTER_QUEUE),
+            "total_tasks_created": tasks_created._value.get(),
+            "total_tasks_processed": tasks_processed._value.get(),
+            "total_tasks_failed": tasks_failed._value.get()
+        }
+        await websocket.send_json({"type": "stats_update", "stats": stats})
+        
+        dead_letters = []
+        for i in range(redis_client.llen(DEAD_LETTER_QUEUE)):
+            item = redis_client.lindex(DEAD_LETTER_QUEUE, i)
+            if item:
+                dead_letters.append(json.loads(item))
+        await websocket.send_json({"type": "dead_letter_update", "dead_letters": dead_letters})
+        
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        manager.disconnect(websocket)
+
+@app.post("/internal/notify")
+async def internal_notify(notification: Notification):
+    if notification.type == "task_completed":
+        tasks_processed.inc()
+        await manager.broadcast_task_update(notification.data.get("task_id"), "completed", "")
+    elif notification.type == "task_failed":
+        tasks_failed.inc()
+        await manager.broadcast_task_update(notification.data.get("task_id"), "failed", notification.data.get("error", ""))
+    
+    stats = {
+        "queue_size": redis_client.llen(QUEUE_NAME),
+        "dead_letter_size": redis_client.llen(DEAD_LETTER_QUEUE),
+        "total_tasks_created": tasks_created._value.get(),
+        "total_tasks_processed": tasks_processed._value.get(),
+        "total_tasks_failed": tasks_failed._value.get()
+    }
+    await manager.broadcast_stats_update(stats)
+    
+    dead_letters = []
+    for i in range(redis_client.llen(DEAD_LETTER_QUEUE)):
+        item = redis_client.lindex(DEAD_LETTER_QUEUE, i)
+        if item:
+            dead_letters.append(json.loads(item))
+    await manager.broadcast_dead_letter_update(dead_letters)
+    
+    return {"status": "ok"}
 
 @app.get("/")
 def root():
     return {
         "message": "Task Queue System - Production Ready",
-        "version": "2.0.0",
+        "version": "3.0.0",
         "endpoints": {
+            "dashboard": "/dashboard",
             "submit_task": "POST /tasks",
             "task_status": "GET /tasks/{task_id}",
-            "queue_length": "GET /queue/length",
             "dead_letter": "GET /dead-letter",
-            "retry_failed": "POST /dead-letter/retry/{task_id}",
-            "delete_failed": "DELETE /dead-letter/{task_id}",
-            "clear_dead_letter": "DELETE /dead-letter/clear",
             "metrics": "GET /metrics",
             "stats": "GET /stats",
-            "dashboard": "GET /dashboard",
-            "api_docs": "/docs"
+            "websocket": "WS /ws",
+            "docs": "/docs"
         }
     }
 
+PORT = int(os.getenv('PORT', 8000))
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=PORT)
+EOF
