@@ -1,5 +1,3 @@
-cd ~/task-queue-system
-cat > models.py << 'EOF'
 from pydantic import BaseModel
 from datetime import datetime
 from enum import Enum
@@ -36,4 +34,3 @@ class Task(BaseModel):
         if 'status' in data and isinstance(data['status'], str):
             data['status'] = TaskStatus(data['status'])
         return Task(**data)
-EOF
