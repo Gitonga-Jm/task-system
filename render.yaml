@@ -2,14 +2,11 @@ services:
   - type: redis
     name: task-system-redis
     plan: free
-    maxmemoryPolicy: noeviction
 
   - type: web
     name: task-system-api
     runtime: python
-    repo: https://github.com/Gitonga-Jm/task-system
     plan: free
-    region: oregon
     buildCommand: pip install -r requirements.txt
     startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
     envVars:
@@ -18,15 +15,11 @@ services:
           type: redis
           name: task-system-redis
           property: hostname
-      - key: REDIS_PORT
-        value: 6379
 
   - type: worker
     name: task-system-worker1
     runtime: python
-    repo: https://github.com/Gitonga-Jm/task-system
     plan: free
-    region: oregon
     buildCommand: pip install -r requirements.txt
     startCommand: python worker.py
     envVars:
@@ -35,15 +28,11 @@ services:
           type: redis
           name: task-system-redis
           property: hostname
-      - key: REDIS_PORT
-        value: 6379
 
   - type: worker
     name: task-system-worker2
     runtime: python
-    repo: https://github.com/Gitonga-Jm/task-system
     plan: free
-    region: oregon
     buildCommand: pip install -r requirements.txt
     startCommand: python worker.py
     envVars:
@@ -52,15 +41,11 @@ services:
           type: redis
           name: task-system-redis
           property: hostname
-      - key: REDIS_PORT
-        value: 6379
 
   - type: worker
     name: task-system-worker3
     runtime: python
-    repo: https://github.com/Gitonga-Jm/task-system
     plan: free
-    region: oregon
     buildCommand: pip install -r requirements.txt
     startCommand: python worker.py
     envVars:
@@ -69,5 +54,3 @@ services:
           type: redis
           name: task-system-redis
           property: hostname
-      - key: REDIS_PORT
-        value: 6379
