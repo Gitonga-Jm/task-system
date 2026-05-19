@@ -5,90 +5,76 @@ import json
 import time
 import signal
 import os
-import requests
-import threading
+import ssl
 from models import Task, TaskStatus
 from PIL import Image
 
-# WebSocket notification via API
-def notify_websocket(event_type: str, data: dict):
-    try:
-        redis_host = os.getenv('REDIS_HOST', 'localhost')
-        api_url = f"http://{redis_host if redis_host != 'localhost' else 'localhost'}:8000/internal/notify"
-        threading.Thread(target=lambda: requests.post(api_url, json={"type": event_type, "data": data}, timeout=2), daemon=True).start()
-    except Exception as e:
-        print(f"[Worker] Failed to send notification: {e}")
+print("Starting worker...")
 
-# Redis connection with Render.com support
-import os
-import redis
-import ssl
-
-REDIS_HOST = os.getenv('REDIS_HOST', 'localhost')
+# ============================================================
+# REDIS CONNECTION - FIXED FOR UPSTASH
+# ============================================================
+REDIS_HOST = os.getenv('REDIS_HOST', 'whole-possum-41731.upstash.io')
 REDIS_PORT = int(os.getenv('REDIS_PORT', 6379))
-REDIS_PASSWORD = os.getenv('REDIS_PASSWORD', None)
-REDIS_TLS = os.getenv('REDIS_TLS', 'False').lower() == 'true'
+REDIS_PASSWORD = os.getenv('REDIS_PASSWORD', 'AaMDAAIgcDFhOTJlZTA4NGM4NTY0MmE5ODVlNTFjMmY2MTM2YzExNQ')
+REDIS_TLS = os.getenv('REDIS_TLS', 'True').lower() == 'true'
 
-print(f"Connecting to Redis: {REDIS_HOST}:{REDIS_PORT} (TLS: {REDIS_TLS})")
+print(f"Worker Redis config: HOST={REDIS_HOST}, PORT={REDIS_PORT}, TLS={REDIS_TLS}")
 
-try:
-    if REDIS_PASSWORD:
+def get_redis_client():
+    try:
         if REDIS_TLS:
-            # Upstash requires TLS with SSL context
-            redis_client = redis.Redis(
+            client = redis.Redis(
                 host=REDIS_HOST,
                 port=REDIS_PORT,
                 password=REDIS_PASSWORD,
                 ssl=True,
-                ssl_cert_reqs=ssl.CERT_NONE,  # Required for Upstash
-                decode_responses=True
+                ssl_cert_reqs=ssl.CERT_NONE,
+                decode_responses=True,
+                socket_timeout=5,
+                socket_connect_timeout=5
             )
         else:
-            redis_client = redis.Redis(
+            client = redis.Redis(
                 host=REDIS_HOST,
                 port=REDIS_PORT,
                 password=REDIS_PASSWORD,
-                decode_responses=True
+                decode_responses=True,
+                socket_timeout=5,
+                socket_connect_timeout=5
             )
-    else:
-        redis_client = redis.Redis(
-            host=REDIS_HOST,
-            port=REDIS_PORT,
-            db=0,
-            decode_responses=True
-        )
-    
-    # Test connection
-    redis_client.ping()
-    print("✓ Redis connected successfully")
-except Exception as e:
-    print(f"✗ Redis connection failed: {e}")
-    redis_client = None
+        client.ping()
+        print("✓ Worker Redis connected successfully")
+        return client
+    except Exception as e:
+        print(f"✗ Worker Redis connection failed: {e}")
+        return None
+
+redis_client = get_redis_client()
+
+QUEUE_NAME = "task_queue"
+DEAD_LETTER_QUEUE = "dead_letter_queue"
+RUNNING = True
 
 def signal_handler(sig, frame):
     global RUNNING
-    print("\n[WORKER] Shutting down gracefully...")
+    print("\n[WORKER] Shutting down...")
     RUNNING = False
 
 signal.signal(signal.SIGINT, signal_handler)
 signal.signal(signal.SIGTERM, signal_handler)
 
 def process_task(task: Task):
-    print(f"[WORKER] Processing task {task.id} (type: {task.type})")
-    print(f"[WORKER] Full payload: {task.payload}")
+    print(f"[WORKER] Processing {task.id} ({task.type})")
     
     if task.type == "fail_me":
         raise Exception("Task was instructed to fail")
     
     elif task.type == "email":
         to_email = task.payload.get('to')
-        subject = task.payload.get('subject', 'No subject')
-        body = task.payload.get('body', '')
-        print(f"[WORKER] Sending email to: {to_email}")
-        print(f"[WORKER] Subject: {subject}")
+        print(f"[WORKER] Sending email to {to_email}")
         time.sleep(1)
-        print(f"[WORKER] Email sent successfully to {to_email}")
-        notify_websocket("task_completed", {"task_id": task.id, "type": "email", "to": to_email})
+        print(f"[WORKER] Email sent")
     
     elif task.type == "resize_image":
         input_path = task.payload.get('input_path')
@@ -96,40 +82,24 @@ def process_task(task: Task):
         width = task.payload.get('width', 800)
         height = task.payload.get('height', 600)
         
-        print(f"[WORKER] Input path: {input_path}")
-        print(f"[WORKER] Output path: {output_path}")
-        
-        if not input_path:
-            raise Exception("Missing input_path in payload")
-        
-        if not os.path.exists(input_path):
-            raise Exception(f"Input image not found: {input_path}")
-        
-        output_dir = os.path.dirname(output_path)
-        if output_dir and not os.path.exists(output_dir):
-            os.makedirs(output_dir, exist_ok=True)
+        if not input_path or not os.path.exists(input_path):
+            raise Exception(f"Image not found: {input_path}")
         
         with Image.open(input_path) as img:
-            original_size = img.size
-            print(f"[WORKER] Original size: {original_size[0]}x{original_size[1]}")
             resized = img.resize((width, height), Image.Resampling.LANCZOS)
             resized.save(output_path)
-        
-        print(f"[WORKER] Image resized and saved to {output_path}")
-        notify_websocket("task_completed", {"task_id": task.id, "type": "image", "output": output_path})
-    
-    else:
-        print(f"[WORKER] Unknown task type: {task.type}")
+        print(f"[WORKER] Image resized to {width}x{height}")
 
 def main():
-    print(f"[WORKER] Started. Listening on queue: {QUEUE_NAME}")
-    print(f"[WORKER] Dead letter queue: {DEAD_LETTER_QUEUE}")
-    print(f"[WORKER] Redis host: {REDIS_HOST}")
+    if redis_client is None:
+        print("[WORKER] FATAL: Cannot connect to Redis")
+        return
+    
+    print(f"[WORKER] Listening on: {QUEUE_NAME}")
     
     while RUNNING:
         try:
             result = redis_client.brpop(QUEUE_NAME, timeout=1)
-            
             if result is None:
                 continue
             
@@ -137,30 +107,24 @@ def main():
             task = Task.from_json(task_json)
             print(f"[WORKER] Got task {task.id}, retries left: {task.retries_remaining}")
             
-            task.status = TaskStatus.PROCESSING
-            redis_client.hset(f"task:{task.id}", "status", task.status.value)
+            redis_client.hset(f"task:{task.id}", "status", "processing")
             
             try:
                 process_task(task)
-                task.status = TaskStatus.COMPLETED
-                print(f"[WORKER] Task {task.id} completed successfully")
-                redis_client.hset(f"task:{task.id}", "status", task.status.value)
+                redis_client.hset(f"task:{task.id}", "status", "completed")
+                print(f"[WORKER] Task {task.id} completed")
                 
             except Exception as e:
                 task.retries_remaining -= 1
                 task.last_error = str(e)
                 
                 if task.retries_remaining > 0:
-                    task.status = TaskStatus.PENDING
-                    print(f"[WORKER] Task {task.id} failed. Retries left: {task.retries_remaining}. Re-queueing.")
+                    print(f"[WORKER] Task failed, {task.retries_remaining} retries left")
                     redis_client.lpush(QUEUE_NAME, task.to_json())
                     redis_client.hset(f"task:{task.id}", "status", "pending")
                     redis_client.hset(f"task:{task.id}", "retries_remaining", task.retries_remaining)
-                    redis_client.hset(f"task:{task.id}", "last_error", str(e))
                 else:
-                    task.status = TaskStatus.FAILED
-                    print(f"[WORKER] Task {task.id} failed permanently. Sending to dead letter queue.")
-                    
+                    print(f"[WORKER] Task failed permanently, moving to DLQ")
                     dead_letter_entry = {
                         "task_id": task.id,
                         "type": task.type,
@@ -171,14 +135,10 @@ def main():
                     }
                     redis_client.lpush(DEAD_LETTER_QUEUE, json.dumps(dead_letter_entry))
                     redis_client.hset(f"task:{task.id}", "status", "failed")
-                    redis_client.hset(f"task:{task.id}", "last_error", str(e))
-                    notify_websocket("task_failed", {"task_id": task.id, "error": str(e), "type": task.type})
                     
-        except Exception as outer_e:
-            print(f"[WORKER] Unexpected error: {outer_e}")
+        except Exception as e:
+            print(f"[WORKER] Error: {e}")
             time.sleep(1)
-    
-    print("[WORKER] Exited")
 
 if __name__ == "__main__":
     main()
