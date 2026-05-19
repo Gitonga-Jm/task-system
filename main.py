@@ -9,7 +9,17 @@ from datetime import datetime
 from typing import Optional
 import ssl
 
-print(f"Python version: {sys.version}")
+print("=" * 60)
+print("DIAGNOSTIC MODE - Checking Environment Variables")
+print("=" * 60)
+
+# Print ALL environment variables (without values for security)
+print("Environment variables set:")
+for key in sorted(os.environ.keys()):
+    if 'REDIS' in key or 'PORT' in key or 'HOST' in key:
+        print(f"  {key} = {'*' * len(os.environ[key]) if 'PASSWORD' in key else os.environ[key]}")
+
+print("=" * 60)
 
 try:
     from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
@@ -33,58 +43,67 @@ except Exception as e:
 app = FastAPI(title="Task Queue System")
 
 # ============================================================
-# PERMANENT REDIS CONNECTION - READS ENVIRONMENT VARIABLES
+# READ REDIS CONFIGURATION
 # ============================================================
-def get_redis_config():
-    """Get Redis configuration from environment variables with fallbacks"""
-    return {
-        'host': os.getenv('REDIS_HOST', 'whole-possum-41731.upstash.io'),
-        'port': int(os.getenv('REDIS_PORT', 6379)),
-        'password': os.getenv('REDIS_PASSWORD', 'AaMDAAIgcDFhOTJlZTA4NGM4NTY0MmE5ODVlNTFjMmY2MTM2YzExNQ'),
-        'tls': os.getenv('REDIS_TLS', 'True').lower() == 'true'
-    }
+# Try multiple possible environment variable names
+REDIS_HOST = os.getenv('REDIS_HOST') or os.getenv('REDISHOST') or os.getenv('REDIS_URL')
+REDIS_PORT = os.getenv('REDIS_PORT') or os.getenv('REDISPORT') or '6379'
+REDIS_PASSWORD = os.getenv('REDIS_PASSWORD') or os.getenv('REDISPASSWORD')
+REDIS_TLS = os.getenv('REDIS_TLS', 'True').lower() == 'true'
 
-def create_redis_client():
-    """Create Redis client with proper TLS configuration"""
-    config = get_redis_config()
-    
-    print(f"Connecting to Redis: {config['host']}:{config['port']} (TLS: {config['tls']})")
-    
+# If REDIS_URL is provided (Railway's format), parse it
+if REDIS_HOST and '://' in str(REDIS_HOST):
+    # Handle redis:// URL format
+    import re
+    match = re.match(r'redis://(?:([^:@]+)(?::([^@]+))?@)?([^:/]+)(?::(\d+))?', REDIS_HOST)
+    if match:
+        REDIS_PASSWORD = match.group(2) or REDIS_PASSWORD
+        REDIS_HOST = match.group(3)
+        REDIS_PORT = match.group(4) or REDIS_PORT
+
+# Fallback to hardcoded values if nothing is set
+if not REDIS_HOST:
+    REDIS_HOST = "whole-possum-41731.upstash.io"
+    print("Using fallback Redis host (hardcoded)")
+
+if not REDIS_PASSWORD:
+    REDIS_PASSWORD = "AaMDAAIgcDFhOTJlZTA4NGM4NTY0MmE5ODVlNTFjMmY2MTM2YzExNQ"
+    print("Using fallback Redis password (hardcoded)")
+
+print(f"Connecting to Redis: {REDIS_HOST}:{REDIS_PORT} (TLS: {REDIS_TLS})")
+
+def get_redis_client():
     try:
-        if config['tls']:
+        if REDIS_TLS:
             client = redis.Redis(
-                host=config['host'],
-                port=config['port'],
-                password=config['password'],
+                host=REDIS_HOST,
+                port=int(REDIS_PORT),
+                password=REDIS_PASSWORD,
                 ssl=True,
                 ssl_cert_reqs=ssl.CERT_NONE,
                 decode_responses=True,
                 socket_timeout=10,
-                socket_connect_timeout=10,
-                retry_on_timeout=True,
-                health_check_interval=30
+                socket_connect_timeout=10
             )
         else:
             client = redis.Redis(
-                host=config['host'],
-                port=config['port'],
-                password=config['password'] if config['password'] else None,
+                host=REDIS_HOST,
+                port=int(REDIS_PORT),
+                password=REDIS_PASSWORD,
                 decode_responses=True,
                 socket_timeout=10,
-                socket_connect_timeout=10,
-                retry_on_timeout=True,
-                health_check_interval=30
+                socket_connect_timeout=10
             )
         
         # Test connection
-        client.ping()
-        print("✓ Redis connected successfully")
+        result = client.ping()
+        print(f"✓ Redis ping result: {result}")
         return client
     except Exception as e:
         print(f"✗ Redis connection failed: {e}")
         return None
 
-redis_client = create_redis_client()
+redis_client = get_redis_client()
 
 QUEUE_NAME = "task_queue"
 DEAD_LETTER_QUEUE = "dead_letter_queue"
@@ -112,7 +131,12 @@ def health():
     if redis_client:
         try:
             redis_client.ping()
-            return {"status": "healthy", "redis": "connected", "host": os.getenv('REDIS_HOST', 'default')}
+            return {
+                "status": "healthy", 
+                "redis": "connected",
+                "redis_host": REDIS_HOST,
+                "redis_port": REDIS_PORT
+            }
         except Exception as e:
             return {"status": "healthy", "redis": "disconnected", "error": str(e)}
     return {"status": "healthy", "redis": "not_configured"}
@@ -128,7 +152,7 @@ def dashboard():
 @app.post("/tasks", status_code=202)
 def create_task(task_req: TaskCreate):
     if redis_client is None:
-        raise HTTPException(status_code=503, detail="Redis unavailable - check REDIS_HOST, REDIS_PORT, REDIS_PASSWORD variables")
+        raise HTTPException(status_code=503, detail=f"Redis unavailable - host: {REDIS_HOST}, port: {REDIS_PORT}")
     
     task_id = str(uuid.uuid4())
     
