@@ -1,363 +1,63 @@
 <!DOCTYPE html>
-<html lang="en">
+<html>
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Task Queue Dashboard</title>
-    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
     <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            min-height: 100vh;
-            padding: 20px;
-        }
-        body.light-mode {
-            background: #f5f5f7;
-        }
-        .container { max-width: 1400px; margin: 0 auto; }
-        .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 30px; flex-wrap: wrap; gap: 15px; }
-        h1 { color: white; font-size: 2em; text-shadow: 2px 2px 4px rgba(0,0,0,0.2); }
-        body.light-mode h1 { color: #333; text-shadow: none; }
-        .theme-toggle { background: rgba(255,255,255,0.2); border: none; padding: 10px 20px; border-radius: 25px; cursor: pointer; color: white; font-size: 14px; }
-        body.light-mode .theme-toggle { background: #ddd; color: #333; }
-        .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px; margin-bottom: 30px; }
-        .stat-card { background: white; border-radius: 15px; padding: 20px; text-align: center; box-shadow: 0 10px 30px rgba(0,0,0,0.2); transition: transform 0.2s; }
-        .stat-card:hover { transform: translateY(-5px); }
-        .stat-number { font-size: 42px; font-weight: bold; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); -webkit-background-clip: text; background-clip: text; color: transparent; }
-        .stat-label { font-size: 12px; text-transform: uppercase; letter-spacing: 1px; color: #666; margin-top: 10px; }
-        .card { background: white; border-radius: 15px; padding: 25px; margin-bottom: 25px; box-shadow: 0 10px 30px rgba(0,0,0,0.2); }
-        .card h2 { margin-bottom: 20px; font-size: 20px; border-left: 4px solid #667eea; padding-left: 15px; color: #333; }
-        .card h3 { color: #667eea; margin: 15px 0 10px 0; font-size: 14px; }
-        select, input, textarea { width: 100%; padding: 12px; margin: 8px 0; border: 2px solid #e0e0e0; border-radius: 8px; font-size: 14px; }
-        select:focus, input:focus, textarea:focus { outline: none; border-color: #667eea; }
-        button { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; border: none; padding: 12px 24px; border-radius: 8px; cursor: pointer; font-size: 14px; font-weight: bold; margin-right: 10px; margin-top: 10px; transition: opacity 0.2s; }
-        button:hover { opacity: 0.8; }
-        .btn-danger { background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%); }
-        .task-item { background: #f8f9fa; border-left: 4px solid #667eea; padding: 15px; margin-bottom: 15px; border-radius: 8px; }
-        .task-id { font-family: monospace; font-size: 11px; color: #888; margin: 5px 0; }
-        .badge { display: inline-block; padding: 4px 10px; border-radius: 20px; font-size: 11px; font-weight: bold; margin-left: 10px; }
-        .badge-failed { background: #dc3545; color: white; }
-        .error { color: #dc3545; font-size: 12px; }
-        .toast { position: fixed; bottom: 20px; right: 20px; background: #28a745; color: white; padding: 12px 24px; border-radius: 8px; animation: slideIn 0.3s ease; z-index: 1000; }
-        .toast.error { background: #dc3545; }
-        @keyframes slideIn { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
-        .two-columns { display: grid; grid-template-columns: repeat(auto-fit, minmax(400px, 1fr)); gap: 20px; }
-        @media (max-width: 768px) { .two-columns { grid-template-columns: 1fr; } .stats-grid { grid-template-columns: repeat(2, 1fr); } }
-        .status-badge { display: inline-block; padding: 2px 8px; border-radius: 12px; font-size: 10px; font-weight: bold; }
-        .status-online { background: #28a745; color: white; }
-        .status-offline { background: #dc3545; color: white; }
-        .connection-status { position: fixed; top: 20px; right: 20px; padding: 8px 16px; border-radius: 20px; font-size: 12px; font-weight: bold; z-index: 1000; }
-        .connection-status.connected { background: #28a745; color: white; }
-        .connection-status.disconnected { background: #dc3545; color: white; }
+        body { font-family: Arial, sans-serif; margin: 40px; background: #0a0e27; color: white; }
+        .container { max-width: 1200px; margin: 0 auto; }
+        h1 { color: #00ff9d; }
+        .stats { display: flex; gap: 20px; margin: 20px 0; }
+        .stat-card { background: #1a1f3a; padding: 20px; border-radius: 10px; flex: 1; text-align: center; }
+        .stat-number { font-size: 36px; font-weight: bold; color: #00ff9d; }
+        button { background: #00ff9d; color: #0a0e27; border: none; padding: 10px 20px; border-radius: 5px; cursor: pointer; }
+        input, select, textarea { width: 100%; padding: 10px; margin: 5px 0; background: #1a1f3a; border: 1px solid #00ff9d; color: white; }
+        .task-item { background: #1a1f3a; padding: 10px; margin: 10px 0; border-radius: 5px; }
     </style>
 </head>
 <body>
-<div class="connection-status disconnected" id="connectionStatus">🔴 Disconnected</div>
 <div class="container">
-    <div class="header">
-        <h1>🚀 Distributed Task Queue System</h1>
-        <button class="theme-toggle" onclick="toggleTheme()">🌓 Dark/Light Mode</button>
+    <h1>🚀 Task Queue System on Render</h1>
+    <div class="stats">
+        <div class="stat-card"><div class="stat-number" id="queueSize">-</div><div>Queue Size</div></div>
+        <div class="stat-card"><div class="stat-number" id="deadLetterSize">-</div><div>Dead Letter Queue</div></div>
     </div>
-
-    <div class="stats-grid" id="stats">
-        <div class="stat-card"><div class="stat-number" id="queueSize">-</div><div class="stat-label">Queue Size</div></div>
-        <div class="stat-card"><div class="stat-number" id="deadLetterSize">-</div><div class="stat-label">Dead Letter Queue</div></div>
-        <div class="stat-card"><div class="stat-number" id="tasksCreated">-</div><div class="stat-label">Tasks Created</div></div>
-        <div class="stat-card"><div class="stat-number" id="tasksFailed">-</div><div class="stat-label">Tasks Failed</div></div>
+    <div style="background: #1a1f3a; padding: 20px; border-radius: 10px;">
+        <h2>Submit Task</h2>
+        <select id="taskType">
+            <option value="email">Email</option>
+            <option value="fail_me">Test Failure</option>
+        </select>
+        <input type="text" id="emailTo" placeholder="To email">
+        <input type="text" id="emailSubject" placeholder="Subject">
+        <button onclick="submitTask()">Submit Task</button>
+        <div id="result"></div>
     </div>
-
-    <div class="two-columns">
-        <div class="card">
-            <h2>📝 Submit Task</h2>
-            <select id="taskType">
-                <option value="email">📧 Email Task</option>
-                <option value="resize_image">🖼️ Resize Image</option>
-                <option value="fail_me">💀 Test Failure</option>
-            </select>
-            <div id="emailFields">
-                <h3>Email Details</h3>
-                <input type="email" id="emailTo" placeholder="recipient@example.com">
-                <input type="text" id="emailSubject" placeholder="Subject">
-                <textarea id="emailBody" rows="3" placeholder="Email content..."></textarea>
-            </div>
-            <div id="imageFields" style="display:none;">
-                <h3>Image Details</h3>
-                <input type="text" id="imagePath" placeholder="Input path: /app/images/input/test_image.png">
-                <input type="text" id="outputPath" placeholder="Output path: /app/images/output/resized.png">
-                <input type="number" id="imgWidth" placeholder="Width (800)">
-                <input type="number" id="imgHeight" placeholder="Height (600)">
-            </div>
-            <div id="failFields" style="display:none;">
-                <h3>⚠️ Test Failure Task</h3>
-                <p style="color: #888; font-size: 12px;">This task will fail 3 times then go to Dead Letter Queue.</p>
-            </div>
-            <button onclick="submitTask()">🚀 Submit Task</button>
-        </div>
-
-        <div class="card">
-            <h2>📊 Task Metrics</h2>
-            <canvas id="taskChart" height="200"></canvas>
-        </div>
-    </div>
-
-    <div class="card">
-        <h2>💀 Dead Letter Queue</h2>
-        <button onclick="loadDeadLetters()">🔄 Refresh</button>
-        <button onclick="clearDeadLetters()" class="btn-danger">🗑️ Clear All</button>
+    <div style="background: #1a1f3a; padding: 20px; border-radius: 10px; margin-top: 20px;">
+        <h2>Dead Letter Queue</h2>
         <div id="deadLetters"></div>
     </div>
 </div>
-
 <script>
-    let chart = null;
-    let ws = null;
-
-    // Theme toggle
-    function toggleTheme() {
-        document.body.classList.toggle('light-mode');
-        localStorage.setItem('theme', document.body.classList.contains('light-mode') ? 'light' : 'dark');
-    }
-
-    if (localStorage.getItem('theme') === 'light') {
-        document.body.classList.add('light-mode');
-    }
-
-    // Show toast notification
-    function showToast(message, isError = false) {
-        const toast = document.createElement('div');
-        toast.className = 'toast' + (isError ? ' error' : '');
-        toast.textContent = message;
-        document.body.appendChild(toast);
-        setTimeout(() => toast.remove(), 3000);
-    }
-
-    // Update connection status
-    function updateConnectionStatus(connected) {
-        const statusEl = document.getElementById('connectionStatus');
-        if (connected) {
-            statusEl.className = 'connection-status connected';
-            statusEl.innerHTML = '🟢 Connected (Real-time)';
-        } else {
-            statusEl.className = 'connection-status disconnected';
-            statusEl.innerHTML = '🔴 Disconnected (Polling)';
-        }
-    }
-
-    // Load stats via REST API (fallback)
     function loadStats() {
-        fetch('/stats')
-            .then(res => res.json())
-            .then(data => {
-                document.getElementById('queueSize').innerText = data.queue_size;
-                document.getElementById('deadLetterSize').innerText = data.dead_letter_size;
-                document.getElementById('tasksCreated').innerText = data.total_tasks_created;
-                document.getElementById('tasksFailed').innerText = data.total_tasks_failed;
-                if (chart) {
-                    chart.data.datasets[0].data = [
-                        data.total_tasks_created - data.total_tasks_failed,
-                        data.total_tasks_failed
-                    ];
-                    chart.update();
-                }
-            })
-            .catch(err => console.error('Stats error:', err));
-    }
-
-    // Load dead letters via REST API
-    function loadDeadLetters() {
-        fetch('/dead-letter')
-            .then(res => res.json())
-            .then(data => {
-                const container = document.getElementById('deadLetters');
-                if (!data.tasks || data.tasks.length === 0) {
-                    container.innerHTML = '<p style="color: #888;">✅ No failed tasks in dead letter queue</p>';
-                    return;
-                }
-                container.innerHTML = data.tasks.map(task => `
-                    <div class="task-item">
-                        <strong>${task.type}</strong>
-                        <span class="badge badge-failed">FAILED</span>
-                        <div class="task-id">ID: ${task.task_id}</div>
-                        <div>❌ Error: <span class="error">${task.last_error}</span></div>
-                        <div>📅 Failed: ${new Date(task.failed_at * 1000).toLocaleString()}</div>
-                        <button onclick="retryTask('${task.task_id}')">🔄 Retry</button>
-                        <button onclick="deleteTask('${task.task_id}')" class="btn-danger">🗑️ Delete</button>
-                    </div>
-                `).join('');
-            })
-            .catch(err => console.error('Dead letter error:', err));
-    }
-
-    // Submit task
-    function submitTask() {
-        const type = document.getElementById('taskType').value;
-        let payload = {};
-
-        if (type === 'email') {
-            payload = {
-                to: document.getElementById('emailTo').value,
-                subject: document.getElementById('emailSubject').value,
-                body: document.getElementById('emailBody').value
-            };
-            if (!payload.to) {
-                showToast('❌ Please enter recipient email', true);
-                return;
-            }
-        } else if (type === 'resize_image') {
-            payload = {
-                input_path: document.getElementById('imagePath').value || '/app/images/input/test_image.png',
-                output_path: document.getElementById('outputPath').value || '/app/images/output/resized.png',
-                width: parseInt(document.getElementById('imgWidth').value) || 800,
-                height: parseInt(document.getElementById('imgHeight').value) || 600
-            };
-        }
-
-        fetch('/tasks', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ type, payload, max_retries: 3 })
-        })
-        .then(res => res.json())
-        .then(data => {
-            showToast(`✅ Task submitted: ${data.task_id.substring(0, 8)}...`);
-            loadStats();
-            if (type === 'email') {
-                document.getElementById('emailTo').value = '';
-                document.getElementById('emailSubject').value = '';
-                document.getElementById('emailBody').value = '';
-            }
-        })
-        .catch(err => showToast(`❌ Error: ${err.message}`, true));
-    }
-
-    // Retry dead letter task
-    function retryTask(taskId) {
-        fetch(`/dead-letter/retry/${taskId}`, { method: 'POST' })
-            .then(() => {
-                showToast(`🔄 Task ${taskId.substring(0, 8)}... requeued`);
-                loadDeadLetters();
-                loadStats();
-            });
-    }
-
-    // Delete dead letter task
-    function deleteTask(taskId) {
-        if (confirm('Delete this failed task?')) {
-            fetch(`/dead-letter/${taskId}`, { method: 'DELETE' })
-                .then(() => {
-                    showToast(`🗑️ Task deleted`);
-                    loadDeadLetters();
-                    loadStats();
-                });
-        }
-    }
-
-    // Clear all dead letters
-    function clearDeadLetters() {
-        if (confirm('⚠️ Delete ALL failed tasks?')) {
-            fetch('/dead-letter/clear', { method: 'DELETE' })
-                .then(() => {
-                    showToast(`🗑️ All dead letters cleared`);
-                    loadDeadLetters();
-                    loadStats();
-                });
-        }
-    }
-
-    // Initialize chart
-    function initChart() {
-        const ctx = document.getElementById('taskChart').getContext('2d');
-        chart = new Chart(ctx, {
-            type: 'doughnut',
-            data: { labels: ['Successful', 'Failed'], datasets: [{ data: [0, 0], backgroundColor: ['#28a745', '#dc3545'], borderWidth: 0 }] },
-            options: { responsive: true, maintainAspectRatio: true, plugins: { legend: { position: 'bottom' } } }
+        fetch('/stats').then(r=>r.json()).then(d=>{
+            document.getElementById('queueSize').innerText = d.queue_size;
+            document.getElementById('deadLetterSize').innerText = d.dead_letter_size;
         });
     }
-
-    // WebSocket connection
-    function connectWebSocket() {
-        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        const wsUrl = `${protocol}//${window.location.host}/ws`;
-        
-        console.log('Connecting to WebSocket:', wsUrl);
-        ws = new WebSocket(wsUrl);
-        
-        ws.onopen = function() {
-            console.log('WebSocket connected');
-            updateConnectionStatus(true);
-            showToast('🟢 Real-time updates connected', false);
-        };
-        
-        ws.onmessage = function(event) {
-            try {
-                const data = JSON.parse(event.data);
-                console.log('WebSocket message:', data);
-                
-                if (data.type === 'stats_update') {
-                    document.getElementById('queueSize').innerText = data.stats.queue_size;
-                    document.getElementById('deadLetterSize').innerText = data.stats.dead_letter_size;
-                    document.getElementById('tasksCreated').innerText = data.stats.total_tasks_created;
-                    document.getElementById('tasksFailed').innerText = data.stats.total_tasks_failed;
-                    if (chart) {
-                        chart.data.datasets[0].data = [
-                            data.stats.total_tasks_created - data.stats.total_tasks_failed,
-                            data.stats.total_tasks_failed
-                        ];
-                        chart.update();
-                    }
-                } else if (data.type === 'task_update') {
-                    showToast(`📦 Task ${data.task_id.substring(0, 8)}... ${data.status}`);
-                    loadStats();
-                } else if (data.type === 'dead_letter_update') {
-                    const container = document.getElementById('deadLetters');
-                    if (!data.dead_letters || data.dead_letters.length === 0) {
-                        container.innerHTML = '<p style="color: #888;">✅ No failed tasks</p>';
-                    } else {
-                        container.innerHTML = data.dead_letters.map(task => `
-                            <div class="task-item">
-                                <strong>${task.type}</strong>
-                                <span class="badge badge-failed">FAILED</span>
-                                <div class="task-id">ID: ${task.task_id}</div>
-                                <div>❌ Error: <span class="error">${task.last_error}</span></div>
-                                <div>📅 Failed: ${new Date(task.failed_at * 1000).toLocaleString()}</div>
-                                <button onclick="retryTask('${task.task_id}')">🔄 Retry</button>
-                                <button onclick="deleteTask('${task.task_id}')" class="btn-danger">🗑️ Delete</button>
-                            </div>
-                        `).join('');
-                    }
-                }
-            } catch (e) {
-                console.error('Error parsing WebSocket message:', e, event.data);
-            }
-        };
-        
-        ws.onclose = function() {
-            console.log('WebSocket disconnected');
-            updateConnectionStatus(false);
-            setTimeout(connectWebSocket, 3000);
-        };
-        
-        ws.onerror = function(error) {
-            console.error('WebSocket error:', error);
-            updateConnectionStatus(false);
-        };
+    function submitTask() {
+        let type = document.getElementById('taskType').value;
+        let payload = {};
+        if(type === 'email') {
+            payload = {to: document.getElementById('emailTo').value, subject: document.getElementById('emailSubject').value};
+        }
+        fetch('/tasks', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({type,payload,max_retries:2})})
+        .then(r=>r.json()).then(d=>{
+            document.getElementById('result').innerHTML = `<p>✅ Task submitted: ${d.task_id}</p>`;
+            loadStats();
+        });
     }
-
-    // Toggle form fields
-    document.getElementById('taskType').addEventListener('change', function() {
-        const type = this.value;
-        document.getElementById('emailFields').style.display = type === 'email' ? 'block' : 'none';
-        document.getElementById('imageFields').style.display = type === 'resize_image' ? 'block' : 'none';
-        document.getElementById('failFields').style.display = type === 'fail_me' ? 'block' : 'none';
-    });
-
-    // Initialize
-    initChart();
     loadStats();
-    loadDeadLetters();
-    connectWebSocket();
+    setInterval(loadStats, 3000);
 </script>
 </body>
 </html>

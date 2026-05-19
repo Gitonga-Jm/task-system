@@ -1,5 +1,3 @@
-cd ~/task-queue-system
-cat > main.py << 'EOF'
 import os
 import sys
 import json
@@ -7,78 +5,86 @@ import uuid
 import asyncio
 from datetime import datetime
 from typing import Optional
-import ssl
 
-print("Starting Task Queue System on Render...")
+print(f"Python version: {sys.version}")
+print("Loading imports...")
 
-try:
-    from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
-    from fastapi.responses import HTMLResponse, Response
-    from fastapi.staticfiles import StaticFiles
-    from pydantic import BaseModel
-    from prometheus_client import Counter, generate_latest, CONTENT_TYPE_LATEST
-    import redis
-    print("✓ Core imports OK")
-except Exception as e:
-    print(f"✗ Import error: {e}")
-    sys.exit(1)
+# Third party imports
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi.responses import HTMLResponse, Response
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
+from prometheus_client import Counter, generate_latest, CONTENT_TYPE_LATEST
+import redis
 
+# Local imports
 try:
     from models import Task, TaskStatus
-    print("✓ Models import OK")
+    print("Models imported successfully")
 except Exception as e:
-    print(f"✗ Models error: {e}")
-    sys.exit(1)
+    print(f"Error importing models: {e}")
+    raise
 
+print("All imports loaded successfully")
+
+# Initialize FastAPI
 app = FastAPI(title="Task Queue System")
 
-# ============================================================
-# REDIS CONNECTION - For Render
-# ============================================================
+# Redis connection
 REDIS_HOST = os.getenv('REDIS_HOST', 'localhost')
 REDIS_PORT = int(os.getenv('REDIS_PORT', 6379))
 REDIS_PASSWORD = os.getenv('REDIS_PASSWORD', None)
+REDIS_TLS = os.getenv('REDIS_TLS', 'False').lower() == 'true'
 
-print(f"Connecting to Redis: {REDIS_HOST}:{REDIS_PORT}")
+print(f"Connecting to Redis at {REDIS_HOST}:{REDIS_PORT}...")
 
 try:
     if REDIS_PASSWORD:
-        redis_client = redis.Redis(
-            host=REDIS_HOST,
-            port=REDIS_PORT,
-            password=REDIS_PASSWORD,
-            decode_responses=True,
-            socket_timeout=10,
-            socket_connect_timeout=10
-        )
+        if REDIS_TLS:
+            redis_client = redis.Redis(
+                host=REDIS_HOST,
+                port=REDIS_PORT,
+                password=REDIS_PASSWORD,
+                ssl=True,
+                ssl_cert_reqs=None,
+                decode_responses=True
+            )
+        else:
+            redis_client = redis.Redis(
+                host=REDIS_HOST,
+                port=REDIS_PORT,
+                password=REDIS_PASSWORD,
+                decode_responses=True
+            )
     else:
         redis_client = redis.Redis(
             host=REDIS_HOST,
             port=REDIS_PORT,
-            decode_responses=True,
-            socket_timeout=10,
-            socket_connect_timeout=10
+            db=0,
+            decode_responses=True
         )
     redis_client.ping()
-    print("✓ Redis connected successfully!")
+    print("Redis connected successfully")
 except Exception as e:
-    print(f"✗ Redis connection failed: {e}")
-    redis_client = None
+    print(f"Redis connection failed: {e}")
+    # Don't exit - let the app try to start anyway
 
+# Queue names
 QUEUE_NAME = "task_queue"
 DEAD_LETTER_QUEUE = "dead_letter_queue"
 
+# Prometheus metrics
 tasks_created = Counter('tasks_created_total', 'Total tasks created')
 tasks_processed = Counter('tasks_processed_total', 'Total tasks processed')
 tasks_failed = Counter('tasks_failed_total', 'Total tasks failed')
 
+# Static files
 static_dir = os.path.join(os.path.dirname(__file__), "static")
 if os.path.exists(static_dir):
     app.mount("/static", StaticFiles(directory=static_dir), name="static")
-    print("✓ Static files mounted")
+    print(f"Static files mounted from {static_dir}")
 else:
-    os.makedirs(static_dir, exist_ok=True)
-    print("✓ Created static directory")
+    print(f"Static directory not found: {static_dir}")
 
 class TaskCreate(BaseModel):
     type: str
@@ -87,17 +93,32 @@ class TaskCreate(BaseModel):
 
 @app.get("/")
 def root():
-    return {"message": "Task Queue System", "status": "running", "platform": "Render"}
+    return {
+        "message": "Task Queue System",
+        "status": "running",
+        "version": "3.0.0"
+    }
 
 @app.get("/health")
 def health():
-    if redis_client:
-        try:
-            redis_client.ping()
-            return {"status": "healthy", "redis": "connected"}
-        except Exception as e:
-            return {"status": "healthy", "redis": f"disconnected: {str(e)}"}
-    return {"status": "healthy", "redis": "not_configured"}
+    return {"status": "healthy"}
+
+@app.get("/stats")
+def get_stats():
+    try:
+        queue_size = redis_client.llen(QUEUE_NAME)
+        dead_letter_size = redis_client.llen(DEAD_LETTER_QUEUE)
+    except Exception as e:
+        queue_size = 0
+        dead_letter_size = 0
+    
+    return {
+        "queue_size": queue_size,
+        "dead_letter_size": dead_letter_size,
+        "total_tasks_created": tasks_created._value.get(),
+        "total_tasks_processed": tasks_processed._value.get(),
+        "total_tasks_failed": tasks_failed._value.get()
+    }
 
 @app.get("/dashboard", response_class=HTMLResponse)
 def dashboard():
@@ -105,28 +126,10 @@ def dashboard():
     if os.path.exists(dashboard_path):
         with open(dashboard_path, "r") as f:
             return HTMLResponse(content=f.read())
-    return HTMLResponse(content="""
-    <!DOCTYPE html>
-    <html>
-    <head><title>Task Queue Dashboard</title></head>
-    <body>
-        <h1>🚀 Task Queue System</h1>
-        <p>System is running on Render!</p>
-        <p>API Status: <span id="status">Checking...</span></p>
-        <script>
-            fetch('/health')
-                .then(r => r.json())
-                .then(d => document.getElementById('status').innerText = d.redis);
-        </script>
-    </body>
-    </html>
-    """)
+    return HTMLResponse(content="<h1>Dashboard not found</h1><p>Please create static/dashboard.html</p>")
 
 @app.post("/tasks", status_code=202)
 def create_task(task_req: TaskCreate):
-    if redis_client is None:
-        raise HTTPException(status_code=503, detail="Redis unavailable")
-    
     task_id = str(uuid.uuid4())
     
     task = Task(
@@ -139,6 +142,7 @@ def create_task(task_req: TaskCreate):
         created_at=datetime.utcnow()
     )
     
+    # Store in Redis hash
     redis_client.hset(f"task:{task_id}", "id", task_id)
     redis_client.hset(f"task:{task_id}", "type", task.type)
     redis_client.hset(f"task:{task_id}", "status", task.status.value)
@@ -146,6 +150,7 @@ def create_task(task_req: TaskCreate):
     redis_client.hset(f"task:{task_id}", "created_at", task.created_at.isoformat())
     redis_client.hset(f"task:{task_id}", "max_retries", task.max_retries)
     
+    # Push to queue
     redis_client.rpush(QUEUE_NAME, task.to_json())
     tasks_created.inc()
     
@@ -157,9 +162,6 @@ def create_task(task_req: TaskCreate):
 
 @app.get("/tasks/{task_id}")
 def get_task_status(task_id: str):
-    if redis_client is None:
-        raise HTTPException(status_code=503, detail="Redis unavailable")
-    
     data = redis_client.hgetall(f"task:{task_id}")
     if not data:
         raise HTTPException(status_code=404, detail="Task not found")
@@ -174,22 +176,24 @@ def get_task_status(task_id: str):
 
 @app.get("/dead-letter")
 def get_dead_letters():
-    if redis_client is None:
-        return {"dead_letter_count": 0, "tasks": []}
-    
     dead_letters = []
-    for i in range(redis_client.llen(DEAD_LETTER_QUEUE)):
+    queue_length = redis_client.llen(DEAD_LETTER_QUEUE)
+    
+    for i in range(queue_length):
         item = redis_client.lindex(DEAD_LETTER_QUEUE, i)
         if item:
             dead_letters.append(json.loads(item))
-    return {"dead_letter_count": len(dead_letters), "tasks": dead_letters}
+    
+    return {
+        "dead_letter_count": queue_length,
+        "tasks": dead_letters
+    }
 
 @app.post("/dead-letter/retry/{task_id}")
 def retry_dead_letter(task_id: str):
-    if redis_client is None:
-        raise HTTPException(status_code=503, detail="Redis unavailable")
+    queue_length = redis_client.llen(DEAD_LETTER_QUEUE)
     
-    for i in range(redis_client.llen(DEAD_LETTER_QUEUE)):
+    for i in range(queue_length):
         item = redis_client.lindex(DEAD_LETTER_QUEUE, i)
         if item:
             dead_letter = json.loads(item)
@@ -205,18 +209,22 @@ def retry_dead_letter(task_id: str):
                     status=TaskStatus.PENDING,
                     created_at=datetime.utcnow()
                 )
+                
                 redis_client.rpush(QUEUE_NAME, new_task.to_json())
+                redis_client.hset(f"task:{task_id}", "status", "pending")
+                redis_client.hset(f"task:{task_id}", "retries_remaining", new_task.retries_remaining)
+                
                 tasks_created.inc()
-                return {"message": f"Task {task_id} re-queued"}
+                
+                return {"message": f"Task {task_id} re-queued successfully"}
     
     raise HTTPException(status_code=404, detail="Task not found")
 
 @app.delete("/dead-letter/{task_id}")
 def delete_dead_letter(task_id: str):
-    if redis_client is None:
-        raise HTTPException(status_code=503, detail="Redis unavailable")
+    queue_length = redis_client.llen(DEAD_LETTER_QUEUE)
     
-    for i in range(redis_client.llen(DEAD_LETTER_QUEUE)):
+    for i in range(queue_length):
         item = redis_client.lindex(DEAD_LETTER_QUEUE, i)
         if item:
             dead_letter = json.loads(item)
@@ -228,12 +236,9 @@ def delete_dead_letter(task_id: str):
 
 @app.delete("/dead-letter/clear")
 def clear_dead_letter_queue():
-    if redis_client is None:
-        raise HTTPException(status_code=503, detail="Redis unavailable")
-    
-    count = redis_client.llen(DEAD_LETTER_QUEUE)
+    queue_length = redis_client.llen(DEAD_LETTER_QUEUE)
     redis_client.delete(DEAD_LETTER_QUEUE)
-    return {"message": f"Cleared {count} tasks"}
+    return {"message": f"Cleared {queue_length} tasks"}
 
 @app.get("/metrics")
 def get_metrics():
@@ -241,41 +246,10 @@ def get_metrics():
 
 @app.get("/queue/length")
 def queue_length():
-    if redis_client is None:
-        return {"queue_length": 0}
     return {"queue_length": redis_client.llen(QUEUE_NAME)}
 
-@app.get("/stats")
-def get_stats():
-    if redis_client is None:
-        return {
-            "queue_size": 0,
-            "dead_letter_size": 0,
-            "total_tasks_created": tasks_created._value.get(),
-            "total_tasks_processed": tasks_processed._value.get(),
-            "total_tasks_failed": tasks_failed._value.get()
-        }
-    
-    return {
-        "queue_size": redis_client.llen(QUEUE_NAME),
-        "dead_letter_size": redis_client.llen(DEAD_LETTER_QUEUE),
-        "total_tasks_created": tasks_created._value.get(),
-        "total_tasks_processed": tasks_processed._value.get(),
-        "total_tasks_failed": tasks_failed._value.get()
-    }
-
-@app.websocket("/ws")
-async def websocket_endpoint(websocket: WebSocket):
-    await websocket.accept()
-    try:
-        while True:
-            await websocket.receive_text()
-    except WebSocketDisconnect:
-        pass
-
+PORT = int(os.getenv('PORT', 8000))
 if __name__ == "__main__":
     import uvicorn
-    port = int(os.getenv('PORT', 8000))
-    print(f"Starting server on port {port}")
-    uvicorn.run(app, host="0.0.0.0", port=port)
-EOF
+    print(f"Starting server on port {PORT}")
+    uvicorn.run(app, host="0.0.0.0", port=PORT)
