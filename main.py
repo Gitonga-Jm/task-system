@@ -199,3 +199,6 @@ if __name__ == "__main__":
     import uvicorn
     print(f"Starting server on port {PORT}")
     uvicorn.run(app, host="0.0.0.0", port=PORT)
+@app.get("/health")
+def health():
+    return {"status": "healthy"}
