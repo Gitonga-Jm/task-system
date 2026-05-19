@@ -1,12 +1,14 @@
 services:
+  # Redis Database (Free)
   - type: redis
     name: task-system-redis
     plan: free
+    maxmemoryPolicy: noeviction
 
+  # API Web Service
   - type: web
     name: task-system-api
     runtime: python
-    plan: free
     buildCommand: pip install -r requirements.txt
     startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
     envVars:
@@ -15,11 +17,15 @@ services:
           type: redis
           name: task-system-redis
           property: hostname
+      - key: REDIS_PORT
+        value: 6379
+      - key: PYTHON_VERSION
+        value: 3.11.15
 
+  # Worker 1
   - type: worker
     name: task-system-worker1
     runtime: python
-    plan: free
     buildCommand: pip install -r requirements.txt
     startCommand: python worker.py
     envVars:
@@ -28,11 +34,13 @@ services:
           type: redis
           name: task-system-redis
           property: hostname
+      - key: REDIS_PORT
+        value: 6379
 
+  # Worker 2
   - type: worker
     name: task-system-worker2
     runtime: python
-    plan: free
     buildCommand: pip install -r requirements.txt
     startCommand: python worker.py
     envVars:
@@ -41,11 +49,13 @@ services:
           type: redis
           name: task-system-redis
           property: hostname
+      - key: REDIS_PORT
+        value: 6379
 
+  # Worker 3
   - type: worker
     name: task-system-worker3
     runtime: python
-    plan: free
     buildCommand: pip install -r requirements.txt
     startCommand: python worker.py
     envVars:
@@ -54,3 +64,5 @@ services:
           type: redis
           name: task-system-redis
           property: hostname
+      - key: REDIS_PORT
+        value: 6379
