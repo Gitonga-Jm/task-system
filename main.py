@@ -9,6 +9,12 @@ from datetime import datetime
 from typing import Optional
 import ssl
 
+# Debug: Print all environment variables
+print("=== ENVIRONMENT VARIABLES ===")
+for key in ['REDIS_HOST', 'REDIS_PORT', 'REDIS_PASSWORD', 'REDIS_TLS']:
+    value = os.getenv(key)
+    print(f"{key} = {value if value else 'NOT SET'}")
+print("==============================")
 print(f"Python version: {sys.version}")
 
 try:
