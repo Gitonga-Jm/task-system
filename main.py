@@ -1,5 +1,4 @@
-cd ~/task-queue-system
-cat > main.py << 'EOF'
+
 import os
 import sys
 import json
