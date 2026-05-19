@@ -60,3 +60,13 @@ Most background job implementations are toy projects. This one is built like wha
 ---
 
 ## 🏗️ Architecture
+
+┌─────────┐ ┌─────────┐ ┌─────────┐ ┌──────────────┐
+│ Client │────▶│ FastAPI │────▶│ Redis │────▶│ Workers x3 │
+│ UI │ │ Server │ │ Queue │ │ (Parallel) │
+└─────────┘ └─────────┘ └─────────┘ └───────┬──────┘
+│ │
+│ ┌─────────┐ │
+└─────────────▶│WebSocket│◀───────────────────────┘
+│ & │
+│Metrics │
