@@ -9,7 +9,7 @@ from datetime import datetime
 from typing import Optional
 import ssl
 
-print("Starting application...")
+print("Starting Task Queue System...")
 
 try:
     from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
@@ -33,52 +33,30 @@ except Exception as e:
 app = FastAPI(title="Task Queue System")
 
 # ============================================================
-# REDIS CONNECTION - FORCED CONFIGURATION
+# DIRECT HARDCODED REDIS CONNECTION - NO ENV VARIABLES
 # ============================================================
-# Hardcoded values that WILL work
 REDIS_HOST = "whole-possum-41731.upstash.io"
 REDIS_PORT = 6379
 REDIS_PASSWORD = "AaMDAAIgcDFhOTJlZTA4NGM4NTY0MmE5ODVlNTFjMmY2MTM2YzExNQ"
 
-# Try environment variables first, but fall back to hardcoded
-REDIS_HOST = os.getenv('REDIS_HOST', REDIS_HOST)
-REDIS_PORT = int(os.getenv('REDIS_PORT', REDIS_PORT))
-REDIS_PASSWORD = os.getenv('REDIS_PASSWORD', REDIS_PASSWORD)
-REDIS_TLS = os.getenv('REDIS_TLS', 'True').lower() == 'true'
+print(f"Connecting to Redis: {REDIS_HOST}:{REDIS_PORT}")
 
-print(f"Connecting to Redis: {REDIS_HOST}:{REDIS_PORT} (TLS: {REDIS_TLS})")
-
-def get_redis_client():
-    try:
-        if REDIS_TLS:
-            client = redis.Redis(
-                host=REDIS_HOST,
-                port=REDIS_PORT,
-                password=REDIS_PASSWORD,
-                ssl=True,
-                ssl_cert_reqs=ssl.CERT_NONE,
-                decode_responses=True,
-                socket_timeout=10,
-                socket_connect_timeout=10
-            )
-        else:
-            client = redis.Redis(
-                host=REDIS_HOST,
-                port=REDIS_PORT,
-                password=REDIS_PASSWORD,
-                decode_responses=True,
-                socket_timeout=10,
-                socket_connect_timeout=10
-            )
-        
-        client.ping()
-        print("✓ Redis connected successfully")
-        return client
-    except Exception as e:
-        print(f"✗ Redis connection failed: {e}")
-        return None
-
-redis_client = get_redis_client()
+try:
+    redis_client = redis.Redis(
+        host=REDIS_HOST,
+        port=REDIS_PORT,
+        password=REDIS_PASSWORD,
+        ssl=True,
+        ssl_cert_reqs=ssl.CERT_NONE,
+        decode_responses=True,
+        socket_timeout=10,
+        socket_connect_timeout=10
+    )
+    redis_client.ping()
+    print("✓ Redis connected successfully!")
+except Exception as e:
+    print(f"✗ Redis connection failed: {e}")
+    redis_client = None
 
 QUEUE_NAME = "task_queue"
 DEAD_LETTER_QUEUE = "dead_letter_queue"
@@ -91,9 +69,6 @@ static_dir = os.path.join(os.path.dirname(__file__), "static")
 if os.path.exists(static_dir):
     app.mount("/static", StaticFiles(directory=static_dir), name="static")
     print("✓ Static files mounted")
-else:
-    print("✗ Static directory not found, creating...")
-    os.makedirs(static_dir, exist_ok=True)
 
 class TaskCreate(BaseModel):
     type: str
@@ -109,9 +84,9 @@ def health():
     if redis_client:
         try:
             redis_client.ping()
-            return {"status": "healthy", "redis": "connected", "host": REDIS_HOST}
-        except Exception as e:
-            return {"status": "healthy", "redis": f"disconnected: {str(e)}"}
+            return {"status": "healthy", "redis": "connected"}
+        except:
+            return {"status": "healthy", "redis": "disconnected"}
     return {"status": "healthy", "redis": "not_configured"}
 
 @app.get("/dashboard", response_class=HTMLResponse)
@@ -120,7 +95,7 @@ def dashboard():
     if os.path.exists(dashboard_path):
         with open(dashboard_path, "r") as f:
             return HTMLResponse(content=f.read())
-    return HTMLResponse(content="<h1>Task Queue Dashboard</h1><p>Dashboard file not found</p>")
+    return HTMLResponse(content="<h1>Dashboard</h1><p>Static file not found</p>")
 
 @app.post("/tasks", status_code=202)
 def create_task(task_req: TaskCreate):
