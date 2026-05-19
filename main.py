@@ -9,17 +9,7 @@ from datetime import datetime
 from typing import Optional
 import ssl
 
-print("=" * 60)
-print("DIAGNOSTIC MODE - Checking Environment Variables")
-print("=" * 60)
-
-# Print ALL environment variables (without values for security)
-print("Environment variables set:")
-for key in sorted(os.environ.keys()):
-    if 'REDIS' in key or 'PORT' in key or 'HOST' in key:
-        print(f"  {key} = {'*' * len(os.environ[key]) if 'PASSWORD' in key else os.environ[key]}")
-
-print("=" * 60)
+print("Starting application...")
 
 try:
     from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
@@ -43,32 +33,18 @@ except Exception as e:
 app = FastAPI(title="Task Queue System")
 
 # ============================================================
-# READ REDIS CONFIGURATION
+# REDIS CONNECTION - FORCED CONFIGURATION
 # ============================================================
-# Try multiple possible environment variable names
-REDIS_HOST = os.getenv('REDIS_HOST') or os.getenv('REDISHOST') or os.getenv('REDIS_URL')
-REDIS_PORT = os.getenv('REDIS_PORT') or os.getenv('REDISPORT') or '6379'
-REDIS_PASSWORD = os.getenv('REDIS_PASSWORD') or os.getenv('REDISPASSWORD')
+# Hardcoded values that WILL work
+REDIS_HOST = "whole-possum-41731.upstash.io"
+REDIS_PORT = 6379
+REDIS_PASSWORD = "AaMDAAIgcDFhOTJlZTA4NGM4NTY0MmE5ODVlNTFjMmY2MTM2YzExNQ"
+
+# Try environment variables first, but fall back to hardcoded
+REDIS_HOST = os.getenv('REDIS_HOST', REDIS_HOST)
+REDIS_PORT = int(os.getenv('REDIS_PORT', REDIS_PORT))
+REDIS_PASSWORD = os.getenv('REDIS_PASSWORD', REDIS_PASSWORD)
 REDIS_TLS = os.getenv('REDIS_TLS', 'True').lower() == 'true'
-
-# If REDIS_URL is provided (Railway's format), parse it
-if REDIS_HOST and '://' in str(REDIS_HOST):
-    # Handle redis:// URL format
-    import re
-    match = re.match(r'redis://(?:([^:@]+)(?::([^@]+))?@)?([^:/]+)(?::(\d+))?', REDIS_HOST)
-    if match:
-        REDIS_PASSWORD = match.group(2) or REDIS_PASSWORD
-        REDIS_HOST = match.group(3)
-        REDIS_PORT = match.group(4) or REDIS_PORT
-
-# Fallback to hardcoded values if nothing is set
-if not REDIS_HOST:
-    REDIS_HOST = "whole-possum-41731.upstash.io"
-    print("Using fallback Redis host (hardcoded)")
-
-if not REDIS_PASSWORD:
-    REDIS_PASSWORD = "AaMDAAIgcDFhOTJlZTA4NGM4NTY0MmE5ODVlNTFjMmY2MTM2YzExNQ"
-    print("Using fallback Redis password (hardcoded)")
 
 print(f"Connecting to Redis: {REDIS_HOST}:{REDIS_PORT} (TLS: {REDIS_TLS})")
 
@@ -77,7 +53,7 @@ def get_redis_client():
         if REDIS_TLS:
             client = redis.Redis(
                 host=REDIS_HOST,
-                port=int(REDIS_PORT),
+                port=REDIS_PORT,
                 password=REDIS_PASSWORD,
                 ssl=True,
                 ssl_cert_reqs=ssl.CERT_NONE,
@@ -88,16 +64,15 @@ def get_redis_client():
         else:
             client = redis.Redis(
                 host=REDIS_HOST,
-                port=int(REDIS_PORT),
+                port=REDIS_PORT,
                 password=REDIS_PASSWORD,
                 decode_responses=True,
                 socket_timeout=10,
                 socket_connect_timeout=10
             )
         
-        # Test connection
-        result = client.ping()
-        print(f"✓ Redis ping result: {result}")
+        client.ping()
+        print("✓ Redis connected successfully")
         return client
     except Exception as e:
         print(f"✗ Redis connection failed: {e}")
@@ -116,6 +91,9 @@ static_dir = os.path.join(os.path.dirname(__file__), "static")
 if os.path.exists(static_dir):
     app.mount("/static", StaticFiles(directory=static_dir), name="static")
     print("✓ Static files mounted")
+else:
+    print("✗ Static directory not found, creating...")
+    os.makedirs(static_dir, exist_ok=True)
 
 class TaskCreate(BaseModel):
     type: str
@@ -131,14 +109,9 @@ def health():
     if redis_client:
         try:
             redis_client.ping()
-            return {
-                "status": "healthy", 
-                "redis": "connected",
-                "redis_host": REDIS_HOST,
-                "redis_port": REDIS_PORT
-            }
+            return {"status": "healthy", "redis": "connected", "host": REDIS_HOST}
         except Exception as e:
-            return {"status": "healthy", "redis": "disconnected", "error": str(e)}
+            return {"status": "healthy", "redis": f"disconnected: {str(e)}"}
     return {"status": "healthy", "redis": "not_configured"}
 
 @app.get("/dashboard", response_class=HTMLResponse)
@@ -147,12 +120,12 @@ def dashboard():
     if os.path.exists(dashboard_path):
         with open(dashboard_path, "r") as f:
             return HTMLResponse(content=f.read())
-    return HTMLResponse(content="<h1>Dashboard</h1><p>Create static/dashboard.html</p>")
+    return HTMLResponse(content="<h1>Task Queue Dashboard</h1><p>Dashboard file not found</p>")
 
 @app.post("/tasks", status_code=202)
 def create_task(task_req: TaskCreate):
     if redis_client is None:
-        raise HTTPException(status_code=503, detail=f"Redis unavailable - host: {REDIS_HOST}, port: {REDIS_PORT}")
+        raise HTTPException(status_code=503, detail="Redis unavailable")
     
     task_id = str(uuid.uuid4())
     
