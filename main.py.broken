@@ -1,0 +1,523 @@
+
+import os
+import sys
+import json
+import uuid
+import asyncio
+import secrets
+from datetime import datetime
+from typing import Optional, List
+import ssl
+
+print("Starting Task Queue System with Authentication...")
+
+try:
+    from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Depends, Header, Security
+    from fastapi.responses import HTMLResponse, Response
+    from fastapi.staticfiles import StaticFiles
+    from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+    from pydantic import BaseModel
+    from prometheus_client import Counter, generate_latest, CONTENT_TYPE_LATEST
+    import redis
+    print("✓ Core imports OK")
+except Exception as e:
+    print(f"✗ Import error: {e}")
+    sys.exit(1)
+
+try:
+    from models import Task, TaskStatus
+    print("✓ Models import OK")
+except Exception as e:
+    print(f"✗ Models error: {e}")
+    sys.exit(1)
+
+app = FastAPI(title="Task Queue System", version="2.0.0")
+
+# ============================================================
+# API KEY AUTHENTICATION SYSTEM
+# ============================================================
+
+# Client API Keys (In production, store these in Redis or database)
+# Each client gets their own key for tracking and billing
+API_KEYS = {
+    # Demo/Test keys
+    "demo-client": "demo_key_123456789",
+    "test-client": "test_key_987654321",
+    
+    # Add your clients here
+    # "client-name": "generated-secret-key",
+}
+
+# Rate limiting storage (in-memory for demo, use Redis for production)
+rate_limit_store = {}
+
+# Security scheme
+security = HTTPBearer(auto_error=False)
+
+def verify_api_key(credentials: HTTPAuthorizationCredentials = Security(security)):
+    """Verify API key from Authorization header"""
+    if not credentials:
+        raise HTTPException(
+            status_code=401,
+            detail="Missing API key. Use 'Authorization: Bearer YOUR_API_KEY' header"
+        )
+    
+    api_key = credentials.credentials
+    
+    # Find client name for this key
+    client_name = None
+    for name, key in API_KEYS.items():
+        if key == api_key:
+            client_name = name
+            break
+    
+    if not client_name:
+        raise HTTPException(
+            status_code=403,
+            detail="Invalid API key. Contact admin to get a valid key."
+        )
+    
+    return {"client_name": client_name, "api_key": api_key}
+
+def verify_api_key_optional(credentials: HTTPAuthorizationCredentials = Security(security)):
+    """Optional API key - for dashboard and public endpoints"""
+    if not credentials:
+        return None
+    
+    api_key = credentials.credentials
+    for name, key in API_KEYS.items():
+        if key == api_key:
+            return {"client_name": name, "api_key": api_key}
+    
+    return None
+
+# Generate new API key for client
+def generate_api_key():
+    """Generate a secure random API key"""
+    return f"key_{secrets.token_urlsafe(32)}"
+
+# Rate limiting function
+def check_rate_limit(client_name: str, limit: int = 100, window: int = 60):
+    """Check if client exceeded rate limit (100 requests per minute default)"""
+    import time
+    key = f"rate:{client_name}"
+    now = time.time()
+    
+    # Clean old entries
+    if key in rate_limit_store:
+        rate_limit_store[key] = [t for t in rate_limit_store[key] if now - t < window]
+    else:
+        rate_limit_store[key] = []
+    
+    if len(rate_limit_store[key]) >= limit:
+        return False
+    
+    rate_limit_store[key].append(now)
+    return True
+
+# ============================================================
+# REDIS CONNECTION
+# ============================================================
+REDIS_HOST = os.getenv('REDIS_HOST', 'localhost')
+REDIS_PORT = int(os.getenv('REDIS_PORT', 6379))
+REDIS_PASSWORD = os.getenv('REDIS_PASSWORD', None)
+REDIS_TLS = os.getenv('REDIS_TLS', 'False').lower() == 'true'
+
+print(f"Connecting to Redis: {REDIS_HOST}:{REDIS_PORT}")
+
+try:
+    if REDIS_PASSWORD:
+        if REDIS_TLS:
+            redis_client = redis.Redis(
+                host=REDIS_HOST,
+                port=REDIS_PORT,
+                password=REDIS_PASSWORD,
+                ssl=True,
+                ssl_cert_reqs=ssl.CERT_NONE,
+                decode_responses=True,
+                socket_timeout=10
+            )
+        else:
+            redis_client = redis.Redis(
+                host=REDIS_HOST,
+                port=REDIS_PORT,
+                password=REDIS_PASSWORD,
+                decode_responses=True,
+                socket_timeout=10
+            )
+    else:
+        redis_client = redis.Redis(
+            host=REDIS_HOST,
+            port=REDIS_PORT,
+            decode_responses=True,
+            socket_timeout=10
+        )
+    redis_client.ping()
+    print("✓ Redis connected successfully!")
+except Exception as e:
+    print(f"✗ Redis connection failed: {e}")
+    redis_client = None
+
+QUEUE_NAME = "task_queue"
+DEAD_LETTER_QUEUE = "dead_letter_queue"
+
+# Prometheus metrics with client tracking
+tasks_created = Counter('tasks_created_total', 'Total tasks created', ['client'])
+tasks_processed = Counter('tasks_processed_total', 'Total tasks processed', ['client'])
+tasks_failed = Counter('tasks_failed_total', 'Total tasks failed', ['client'])
+
+static_dir = os.path.join(os.path.dirname(__file__), "static")
+if os.path.exists(static_dir):
+    app.mount("/static", StaticFiles(directory=static_dir), name="static")
+    print("✓ Static files mounted")
+
+class TaskCreate(BaseModel):
+    type: str
+    payload: dict
+    max_retries: int = 3
+
+class CreateAPIKeyRequest(BaseModel):
+    client_name: str
+
+class CreateAPIKeyResponse(BaseModel):
+    client_name: str
+    api_key: str
+    message: str
+
+# ============================================================
+# PUBLIC ENDPOINTS (No authentication required)
+# ============================================================
+
+@app.get("/")
+def root():
+    return {
+        "message": "Task Queue System",
+        "status": "running",
+        "version": "2.0.0",
+        "authentication": "Required for /tasks, /dead-letter endpoints",
+        "docs": "/docs",
+        "health": "/health"
+    }
+
+@app.get("/health")
+def health():
+    if redis_client:
+        try:
+            redis_client.ping()
+            return {
+                "status": "healthy",
+                "redis": "connected",
+                "authenticated_endpoints": "/tasks, /dead-letter"
+            }
+        except:
+            return {"status": "healthy", "redis": "disconnected"}
+    return {"status": "healthy", "redis": "not_configured"}
+
+@app.get("/dashboard", response_class=HTMLResponse)
+def dashboard():
+    dashboard_path = os.path.join(static_dir, "dashboard.html")
+    if os.path.exists(dashboard_path):
+        with open(dashboard_path, "r") as f:
+            return HTMLResponse(content=f.read())
+    return HTMLResponse(content="""
+    <!DOCTYPE html>
+    <html>
+    <head><title>Task Queue Dashboard</title></head>
+    <body>
+        <h1>🚀 Task Queue System</h1>
+        <p>API is running! Authentication required for task submission.</p>
+        <p>Use Bearer token in Authorization header.</p>
+        <hr>
+        <h2>Get API Key</h2>
+        <p>Contact admin: your-email@example.com</p>
+        <h2>Test with curl:</h2>
+        <pre>
+curl -X POST https://your-api.com/tasks \\
+  -H "Authorization: Bearer YOUR_API_KEY" \\
+  -H "Content-Type: application/json" \\
+  -d '{"type":"email","payload":{"to":"test@example.com"},"max_retries":2}'
+        </pre>
+    </body>
+    </html>
+    """)
+
+# ============================================================
+# ADMIN ENDPOINTS (Generate API keys)
+# ============================================================
+
+@app.post("/admin/generate-key", response_model=CreateAPIKeyResponse)
+def generate_client_key(request: CreateAPIKeyRequest):
+    """Generate a new API key for a client (Admin only - protect this in production)"""
+    if request.client_name in API_KEYS:
+        raise HTTPException(status_code=400, detail="Client already exists")
+    
+    new_key = generate_api_key()
+    API_KEYS[request.client_name] = new_key
+    
+    # In production, save to database/Redis
+    if redis_client:
+        redis_client.hset("api_keys", request.client_name, new_key)
+    
+    return CreateAPIKeyResponse(
+        client_name=request.client_name,
+        api_key=new_key,
+        message="API key generated successfully. Keep this key secure!"
+    )
+
+@app.get("/admin/keys")
+def list_api_keys():
+    """List all API keys (Admin only - protect this in production)"""
+    # Return masked keys for security
+    masked_keys = {}
+    for name, key in API_KEYS.items():
+        masked_keys[name] = key[:10] + "..." + key[-4:]
+    return {"clients": masked_keys, "total": len(API_KEYS)}
+
+# ============================================================
+# PROTECTED ENDPOINTS (Require API key)
+# ============================================================
+
+@app.post("/tasks", status_code=202)
+def create_task(
+    task_req: TaskCreate,
+    auth: dict = Depends(verify_api_key)
+):
+    """Submit a new task (Requires API key)"""
+    client_name = auth["client_name"]
+    
+    # Rate limiting: 100 requests per minute per client
+    if not check_rate_limit(client_name):
+        raise HTTPException(
+            status_code=429,
+            detail="Rate limit exceeded. Maximum 100 requests per minute."
+        )
+    
+    if redis_client is None:
+        raise HTTPException(status_code=503, detail="Redis unavailable")
+    
+    task_id = str(uuid.uuid4())
+    
+    task = Task(
+        id=task_id,
+        type=task_req.type,
+        payload=task_req.payload,
+        max_retries=task_req.max_retries,
+        retries_remaining=task_req.max_retries,
+        status=TaskStatus.PENDING,
+        created_at=datetime.utcnow()
+    )
+    
+    # Store task metadata with client tracking
+    redis_client.hset(f"task:{task_id}", "id", task_id)
+    redis_client.hset(f"task:{task_id}", "type", task.type)
+    redis_client.hset(f"task:{task_id}", "status", task.status.value)
+    redis_client.hset(f"task:{task_id}", "retries_remaining", task.retries_remaining)
+    redis_client.hset(f"task:{task_id}", "created_at", task.created_at.isoformat())
+    redis_client.hset(f"task:{task_id}", "max_retries", task.max_retries)
+    redis_client.hset(f"task:{task_id}", "client", client_name)  # Track which client submitted
+    
+    redis_client.rpush(QUEUE_NAME, task.to_json())
+    tasks_created.labels(client=client_name).inc()
+    
+    return {
+        "task_id": task_id,
+        "status": "accepted",
+        "queue_position": redis_client.llen(QUEUE_NAME),
+        "client": client_name
+    }
+
+@app.get("/tasks/{task_id}")
+def get_task_status(
+    task_id: str,
+    auth: Optional[dict] = Depends(verify_api_key_optional)
+):
+    """Check task status (Optional API key - public tasks can be tracked)"""
+    if redis_client is None:
+        raise HTTPException(status_code=503, detail="Redis unavailable")
+    
+    data = redis_client.hgetall(f"task:{task_id}")
+    if not data:
+        raise HTTPException(status_code=404, detail="Task not found")
+    
+    # If authenticated, show full details. If not, show limited info
+    response = {
+        "id": data.get("id"),
+        "status": data.get("status"),
+        "created_at": data.get("created_at")
+    }
+    
+    if auth:
+        response["type"] = data.get("type")
+        response["retries_remaining"] = data.get("retries_remaining")
+        response["last_error"] = data.get("last_error", None)
+        response["client"] = data.get("client")
+    
+    return response
+
+@app.get("/dead-letter")
+def get_dead_letters(auth: dict = Depends(verify_api_key)):
+    """View dead letter queue (Requires API key)"""
+    if redis_client is None:
+        return {"dead_letter_count": 0, "tasks": []}
+    
+    client_name = auth["client_name"]
+    dead_letters = []
+    
+    for i in range(redis_client.llen(DEAD_LETTER_QUEUE)):
+        item = redis_client.lindex(DEAD_LETTER_QUEUE, i)
+        if item:
+            dead_letter = json.loads(item)
+            # Only show tasks for this client
+            if dead_letter.get('client') == client_name or not dead_letter.get('client'):
+                dead_letters.append(dead_letter)
+    
+    return {
+        "dead_letter_count": len(dead_letters),
+        "tasks": dead_letters,
+        "client": client_name
+    }
+
+@app.post("/dead-letter/retry/{task_id}")
+def retry_dead_letter(
+    task_id: str,
+    auth: dict = Depends(verify_api_key)
+):
+    """Retry a failed task (Requires API key)"""
+    if redis_client is None:
+        raise HTTPException(status_code=503, detail="Redis unavailable")
+    
+    client_name = auth["client_name"]
+    
+    for i in range(redis_client.llen(DEAD_LETTER_QUEUE)):
+        item = redis_client.lindex(DEAD_LETTER_QUEUE, i)
+        if item:
+            dead_letter = json.loads(item)
+            if dead_letter.get("task_id") == task_id:
+                # Verify ownership
+                if dead_letter.get('client') and dead_letter.get('client') != client_name:
+                    raise HTTPException(status_code=403, detail="Task belongs to different client")
+                
+                redis_client.lrem(DEAD_LETTER_QUEUE, 1, item)
+                
+                new_task = Task(
+                    id=task_id,
+                    type=dead_letter["type"],
+                    payload=dead_letter["payload"],
+                    max_retries=dead_letter["max_retries"],
+                    retries_remaining=dead_letter["max_retries"],
+                    status=TaskStatus.PENDING,
+                    created_at=datetime.utcnow()
+                )
+                redis_client.rpush(QUEUE_NAME, new_task.to_json())
+                tasks_created.labels(client=client_name).inc()
+                return {"message": f"Task {task_id} re-queued", "client": client_name}
+    
+    raise HTTPException(status_code=404, detail="Task not found")
+
+@app.delete("/dead-letter/{task_id}")
+def delete_dead_letter(
+    task_id: str,
+    auth: dict = Depends(verify_api_key)
+):
+    """Delete a failed task (Requires API key)"""
+    if redis_client is None:
+        raise HTTPException(status_code=503, detail="Redis unavailable")
+    
+    client_name = auth["client_name"]
+    
+    for i in range(redis_client.llen(DEAD_LETTER_QUEUE)):
+        item = redis_client.lindex(DEAD_LETTER_QUEUE, i)
+        if item:
+            dead_letter = json.loads(item)
+            if dead_letter.get("task_id") == task_id:
+                if dead_letter.get('client') and dead_letter.get('client') != client_name:
+                    raise HTTPException(status_code=403, detail="Task belongs to different client")
+                
+                redis_client.lrem(DEAD_LETTER_QUEUE, 1, item)
+                return {"message": f"Task {task_id} deleted", "client": client_name}
+    
+    raise HTTPException(status_code=404, detail="Task not found")
+
+@app.delete("/dead-letter/clear")
+def clear_dead_letter_queue(auth: dict = Depends(verify_api_key)):
+    """Clear all failed tasks for this client (Requires API key)"""
+    if redis_client is None:
+        raise HTTPException(status_code=503, detail="Redis unavailable")
+    
+    client_name = auth["client_name"]
+    count = 0
+    
+    # Only delete tasks belonging to this client
+    new_queue = []
+    for i in range(redis_client.llen(DEAD_LETTER_QUEUE)):
+        item = redis_client.lindex(DEAD_LETTER_QUEUE, i)
+        if item:
+            dead_letter = json.loads(item)
+            if dead_letter.get('client') and dead_letter.get('client') != client_name:
+                new_queue.append(item)
+            else:
+                count += 1
+    
+    # Rebuild queue
+    redis_client.delete(DEAD_LETTER_QUEUE)
+    for item in new_queue:
+        redis_client.rpush(DEAD_LETTER_QUEUE, item)
+    
+    return {"message": f"Cleared {count} tasks for client {client_name}"}
+
+@app.get("/metrics")
+def get_metrics(auth: dict = Depends(verify_api_key_optional)):
+    """Prometheus metrics (Optional auth)"""
+    return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
+
+@app.get("/queue/length")
+def queue_length(auth: dict = Depends(verify_api_key_optional)):
+    """Get queue length (Optional auth)"""
+    if redis_client is None:
+        return {"queue_length": 0}
+    return {"queue_length": redis_client.llen(QUEUE_NAME)}
+
+@app.get("/stats")
+def get_stats(auth: dict = Depends(verify_api_key_optional)):
+    """Get system statistics (Optional auth shows more details)"""
+    if redis_client is None:
+        return {
+            "queue_size": 0,
+            "dead_letter_size": 0,
+            "total_tasks_created": 0,
+            "total_tasks_processed": 0,
+            "total_tasks_failed": 0
+        }
+    
+    stats = {
+        "queue_size": redis_client.llen(QUEUE_NAME),
+        "dead_letter_size": redis_client.llen(DEAD_LETTER_QUEUE),
+        "total_tasks_created": tasks_created._value.get(),
+        "total_tasks_processed": tasks_processed._value.get(),
+        "total_tasks_failed": tasks_failed._value.get()
+    }
+    
+    if auth:
+        # Add per-client breakdown for authenticated users
+        stats["authenticated"] = True
+        stats["client"] = auth["client_name"]
+    
+    return stats
+
+@app.websocket("/ws")
+async def websocket_endpoint(websocket: WebSocket):
+    await websocket.accept()
+    try:
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        pass
+
+if __name__ == "__main__":
+    import uvicorn
+    port = int(os.getenv('PORT', 8000))
+    print(f"Starting server on port {port}")
+    print(f"API Keys configured: {len(API_KEYS)} clients")
+    uvicorn.run(app, host="0.0.0.0", port=port)
+EOF
+
