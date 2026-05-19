@@ -20,18 +20,50 @@ def notify_websocket(event_type: str, data: dict):
         print(f"[Worker] Failed to send notification: {e}")
 
 # Redis connection with Render.com support
+import os
+import redis
+import ssl
+
 REDIS_HOST = os.getenv('REDIS_HOST', 'localhost')
 REDIS_PORT = int(os.getenv('REDIS_PORT', 6379))
 REDIS_PASSWORD = os.getenv('REDIS_PASSWORD', None)
+REDIS_TLS = os.getenv('REDIS_TLS', 'False').lower() == 'true'
 
-if REDIS_PASSWORD:
-    redis_client = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, password=REDIS_PASSWORD, decode_responses=True)
-else:
-    redis_client = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, db=0, decode_responses=True)
+print(f"Connecting to Redis: {REDIS_HOST}:{REDIS_PORT} (TLS: {REDIS_TLS})")
 
-QUEUE_NAME = "task_queue"
-DEAD_LETTER_QUEUE = "dead_letter_queue"
-RUNNING = True
+try:
+    if REDIS_PASSWORD:
+        if REDIS_TLS:
+            # Upstash requires TLS with SSL context
+            redis_client = redis.Redis(
+                host=REDIS_HOST,
+                port=REDIS_PORT,
+                password=REDIS_PASSWORD,
+                ssl=True,
+                ssl_cert_reqs=ssl.CERT_NONE,  # Required for Upstash
+                decode_responses=True
+            )
+        else:
+            redis_client = redis.Redis(
+                host=REDIS_HOST,
+                port=REDIS_PORT,
+                password=REDIS_PASSWORD,
+                decode_responses=True
+            )
+    else:
+        redis_client = redis.Redis(
+            host=REDIS_HOST,
+            port=REDIS_PORT,
+            db=0,
+            decode_responses=True
+        )
+    
+    # Test connection
+    redis_client.ping()
+    print("✓ Redis connected successfully")
+except Exception as e:
+    print(f"✗ Redis connection failed: {e}")
+    redis_client = None
 
 def signal_handler(sig, frame):
     global RUNNING

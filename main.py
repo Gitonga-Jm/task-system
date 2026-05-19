@@ -30,28 +30,49 @@ except Exception as e:
 
 app = FastAPI(title="Task Queue System")
 
+import os
+import redis
+import ssl
+
 REDIS_HOST = os.getenv('REDIS_HOST', 'localhost')
 REDIS_PORT = int(os.getenv('REDIS_PORT', 6379))
 REDIS_PASSWORD = os.getenv('REDIS_PASSWORD', None)
 REDIS_TLS = os.getenv('REDIS_TLS', 'False').lower() == 'true'
 
+print(f"Connecting to Redis: {REDIS_HOST}:{REDIS_PORT} (TLS: {REDIS_TLS})")
+
 try:
     if REDIS_PASSWORD:
         if REDIS_TLS:
+            # Upstash requires TLS with SSL context
             redis_client = redis.Redis(
-                host=REDIS_HOST, port=REDIS_PORT, password=REDIS_PASSWORD,
-                ssl=True, ssl_cert_reqs=None, decode_responses=True
+                host=REDIS_HOST,
+                port=REDIS_PORT,
+                password=REDIS_PASSWORD,
+                ssl=True,
+                ssl_cert_reqs=ssl.CERT_NONE,  # Required for Upstash
+                decode_responses=True
             )
         else:
             redis_client = redis.Redis(
-                host=REDIS_HOST, port=REDIS_PORT, password=REDIS_PASSWORD, decode_responses=True
+                host=REDIS_HOST,
+                port=REDIS_PORT,
+                password=REDIS_PASSWORD,
+                decode_responses=True
             )
     else:
-        redis_client = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, db=0, decode_responses=True)
+        redis_client = redis.Redis(
+            host=REDIS_HOST,
+            port=REDIS_PORT,
+            db=0,
+            decode_responses=True
+        )
+    
+    # Test connection
     redis_client.ping()
-    print("Redis connected")
+    print("✓ Redis connected successfully")
 except Exception as e:
-    print(f"Redis error: {e}")
+    print(f"✗ Redis connection failed: {e}")
     redis_client = None
 
 QUEUE_NAME = "task_queue"
